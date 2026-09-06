@@ -16,40 +16,40 @@ Screenshot showing the default crosshair. To use a different crosshair place one
 
 # Installation
 
-## Flatpak Installation
-
-Necessary if your games (and apps like Steam / Lutris / Heroic) run via Flatpak. This is for example the case on Bazzite and other immutable Linux distributions. 
-
-### Download Github Release
-- Download **all** .flatpack files from the [releases page](https://github.com/JFingerle/krosshair-flatpak/releases).
-- Install via double-clicking the file in your file manager (or run `flatpak install (--user) filename.flatpak` in your terminal).
-
-
-### Build and Flatpak bundles yourself
-
-Builds and installs Flatpak bundles for the supported runtime versions (24.08, 25.08, 26.08).
-
-```bash
-sudo pacman -S flatpak-builder
-git clone https://github.com/jfingerle/krosshair.git
-cd krosshair
-make flatpak-install
-```
-
 ## Non-Flatpak Installation
 
-## Arch Linux AUR
+## Option 1: Via Arch Linux AUR
 
 ```bash
 yay -S krosshair
 ```
 
-## From source
+## Option 2: Build from Source
 
 ```bash
-git clone https://github.com/jfingerle/krosshair.git
+git clone https://github.com/jfingerle/krosshair-flatpak.git
 cd krosshair
 make install
+```
+
+## Flatpak Installation
+
+Necessary if your games (and apps like Steam / Lutris / Heroic) run via Flatpak. This is for example the case on Bazzite and other immutable Linux distributions. 
+
+### Option 1: Download Github Release
+- Download **all** .flatpack files from the [releases page](https://github.com/jfingerle/krosshair-flatpak/releases).
+- Install via double-clicking the file in your file manager (or run `flatpak install (--user) filename.flatpak` in your terminal).
+
+
+### Option 2: Build from Source
+
+Builds and installs Flatpak bundles for the supported runtime versions (24.08, 25.08, 26.08).
+
+```bash
+sudo pacman -S flatpak-builder
+git clone https://github.com/jfingerle/krosshair-flatpak.git
+cd krosshair
+make flatpak-install
 ```
 
 # Usage
