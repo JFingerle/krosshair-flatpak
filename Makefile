@@ -78,12 +78,16 @@ flatpak-install-user: flatpak-build
 	for VER in $(FLATPAK_VERSIONS); do \
 		flatpak install --user -y --reinstall $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak || exit 1; \
 	done
+	echo -e "\n-----\nInstalled flatpak packages\n-----\n"
+	flatpak list  | grep krosshair
 
 # Installs the flatpak system-wide
 flatpak-install-system: flatpak-build
 	for VER in $(FLATPAK_VERSIONS); do \
 		sudo flatpak install -y --reinstall $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak || exit 1; \
 	done
+	echo -e "\n-----\nInstalled flatpak packages\n-----\n"
+	flatpak list  | grep krosshair
 
 # Runs inside the flatpak-builder sandbox (invoked from the .yml).
 # Builds the layer and stages files into the flatpak output (/app).
