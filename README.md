@@ -18,11 +18,9 @@ Screenshot showing the default crosshair. To use a different crosshair place one
 
 ## Non-Flatpak Installation
 
-## Option 1: Via Arch Linux AUR
+## <del>Option 1: Via Arch Linux AUR</del>
 
-```bash
-yay -S krosshair
-```
+This fork (jfingerle/krosshair-flatpak) is currently not available on the AUR, only the original [noahlyk/krosshair](https://github.com/noahlyk/krosshair) fork.
 
 ## Option 2: Build from Source
 
