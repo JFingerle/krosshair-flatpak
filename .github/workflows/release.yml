@@ -69,12 +69,18 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install system dependencies
-        run: pacman -Syu --noconfirm base-devel vulkan-headers vulkan-icd-loader libx11 libgl git
+        run: pacman -Syu --noconfirm base-devel vulkan-headers vulkan-icd-loader libx11 libgl git flatpak-builder flatpak
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Enable Flathub remote
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak remote-enable --user flathub
       - name: Build binary
         run: make release
+      - name: Build flatpak
+        run: make flatpak-build
       - name: Determine architecture
         id: arch
         run: |
@@ -110,6 +116,7 @@ jobs:
             aur/
             krosshair-linux-*.tar.gz
             krosshair-linux-*.sha256
+            build/flatpak/*.flatpak
 
   release:
     needs: [version, build]
@@ -160,7 +167,8 @@ jobs:
             --title "v${VERSION}" \
             --notes "Release v${VERSION}" \
             krosshair-linux-${ARCH_NAME}.tar.gz \
-            krosshair-linux-${ARCH_NAME}.sha256
+            krosshair-linux-${ARCH_NAME}.sha256 \
+            build/flatpak/*.flatpak
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
