@@ -47,21 +47,21 @@ flatpak:
 	git diff --exit-code $(FLATPAK_MANIST_FILE) || { echo "ERROR: $(FLATPAK_MANIST_FILE) has uncommitted changes"; exit 1; }
 	for VER in $(FLATPAK_VERSIONS); do \
 		echo -e "\n-----\nBuilding flatpak for version \"$$VER\"...\n-----\n"; \
-		mkdir -p $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER; \
-		sed -i "s|^branch:.*|branch: \"$$VER\"|" $(FLATPAK_MANIST_FILE); \
-		sed -i "s|^runtime-version:.*|runtime-version: \"$$VER\"|" $(FLATPAK_MANIST_FILE); \
+		mkdir -p $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER || exit 1; \
+		sed -i "s|^branch:.*|branch: \"$$VER\"|" $(FLATPAK_MANIST_FILE) || exit 1; \
+		sed -i "s|^runtime-version:.*|runtime-version: \"$$VER\"|" $(FLATPAK_MANIST_FILE) || exit 1; \
 		# flatpak SDK install \
 		echo -e "\n-----\nRunning flatpak install for \"org.freedesktop.Sdk//$$VER\"...\n-----\n"; \
-		flatpak install -y flathub org.freedesktop.Sdk//$$VER; \
+		flatpak install -y flathub org.freedesktop.Sdk//$$VER || exit 1; \
 		# flatpak-builder \
 		echo -e "\n-----\nRunning flatpak-builder for \"$$VER\"...\n-----\n"; \
-		flatpak-builder --force-clean $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER $(FLATPAK_MANIST_FILE); \
+		flatpak-builder --force-clean $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER $(FLATPAK_MANIST_FILE) || exit 1; \
 		# flatpak build-export \
 		echo -e "\n-----\nRunning flatpak build-export for \"$$VER\"...\n-----\n"; \
-		flatpak build-export $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER; \
+		flatpak build-export $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER || exit 1; \
 		# flatpak build-bundle \
 		echo -e "\n-----\nRunning flatpak build-bundle for \"$$VER\"...\n-----\n"; \
-		flatpak build-bundle $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak runtime/$(FLATPAK_BUNDLE_ID)/x86_64/master; \
+		flatpak build-bundle $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak runtime/$(FLATPAK_BUNDLE_ID)/x86_64/master || exit 1; \
 	done
 	git checkout -- $(MANIFEST)
 
