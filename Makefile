@@ -20,6 +20,7 @@ FLATPAK_EXPORT_DIR = $(FLATPAK_BUILD_DIR_INTERMEDIATE)/export
 FLATPAK_BUNDLE_ID = org.freedesktop.Platform.VulkanLayer.krosshair
 FLATPAK_VERSIONS = 24.08 25.08 26.08
 FLATPAK_LIB_PATH = /usr/lib/extensions/vulkan/krosshair/lib/krosshair.so
+KROSSHAIR_STD_PATH = /usr/lib/krosshair/krosshair.so
 FLATPAK_MANIST_FILE = flatpak/$(FLATPAK_BUNDLE_ID).yml
 FLATPAK_METAINFO_FILE = flatpak/$(FLATPAK_BUNDLE_ID).metainfo.xml
 PKGVERSION := $(shell grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)
@@ -47,12 +48,12 @@ clean:
 flatpak-build:
 	mkdir -p $(FLATPAK_BUILD_DIR)
 
-	# Check and abort if the manifest or metainfo file contain uncommited changes. This is necessary as the build will temporily modify the files during the build.
-	git diff --exit-code $(FLATPAK_MANIST_FILE) $(FLATPAK_METAINFO_FILE) || { echo "ERROR: $(FLATPAK_MANIST_FILE) or $(FLATPAK_METAINFO_FILE) has uncommitted changes"; exit 1; }
+	# Check and abort if the manifest, metainfo, or krosshair.json contain uncommitted changes. This is necessary as the build will temporarily modify the files during the build.
+	git diff --exit-code $(FLATPAK_MANIST_FILE) $(FLATPAK_METAINFO_FILE) krosshair.json || { echo "ERROR: $(FLATPAK_MANIST_FILE), $(FLATPAK_METAINFO_FILE), or krosshair.json has uncommitted changes"; exit 1; }
 
-	# Modify the metainfo file.
-	sed -i "s|<release version=\"[^\"]*\" date=\"[^\"]*\"/>|<release version=\"$(PKGVERSION)\" date=\"$$(date +%Y-%m-%d)\"/>|" $(FLATPAK_METAINFO_FILE) || exit 1;
-
+	# Modify the metainfo file and krosshair.json for the flatpak build.
+	sed -i "s|<release version=\"[^\"]*\" date=\"[^\"]*\"/>|<release version=\"$(PKGVERSION)\" date=\"$$(date +%Y-%m-%d)\"/>|" $(FLATPAK_METAINFO_FILE) && \
+	sed -i "s|$(KROSSHAIR_STD_PATH)|$(FLATPAK_LIB_PATH)|" krosshair.json && \
 	for VER in $(FLATPAK_VERSIONS); do \
 		echo -e "\n-----\nBuilding flatpak for version \"$$VER\"...\n-----\n"; \
 		mkdir -p $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER || exit 1; \
@@ -60,7 +61,7 @@ flatpak-build:
 		sed -i "s|^runtime-version:.*|runtime-version: \"$$VER\"|" $(FLATPAK_MANIST_FILE) || exit 1; \
 		# flatpak SDK install \
 		echo -e "\n-----\nRunning flatpak install for \"org.freedesktop.Sdk//$$VER\"...\n-----\n"; \
-		flatpak install -y flathub org.freedesktop.Sdk//$$VER || exit 1; \
+		flatpak install --user -y flathub org.freedesktop.Sdk//$$VER || exit 1; \
 		# flatpak-builder \
 		echo -e "\n-----\nRunning flatpak-builder for \"$$VER\"...\n-----\n"; \
 		flatpak-builder --force-clean $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER $(FLATPAK_MANIST_FILE) || exit 1; \
@@ -70,8 +71,8 @@ flatpak-build:
 		# flatpak build-bundle \
 		echo -e "\n-----\nRunning flatpak build-bundle for \"$$VER\"...\n-----\n"; \
 		flatpak build-bundle --runtime $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak $(FLATPAK_BUNDLE_ID) $$VER || exit 1; \
-	done
-	git checkout -- $(FLATPAK_MANIST_FILE) $(FLATPAK_METAINFO_FILE)
+	done && \
+	git checkout -- $(FLATPAK_MANIST_FILE) $(FLATPAK_METAINFO_FILE) krosshair.json
 
 # Installs the flatpak for the current user
 flatpak-install-user: flatpak-build
@@ -92,7 +93,6 @@ flatpak-install-system: flatpak-build
 # Runs inside the flatpak-builder sandbox (invoked from the .yml).
 # Builds the layer and stages files into the flatpak output (/app).
 flatpak-builder-callback: release
-	sed -i 's|"library_path"[[:space:]]*:[[:space:]]*"[^"]*"|"library_path": "$(FLATPAK_LIB_PATH)"|' krosshair.json
 	install -Dm755 $(LIBRARY) -t ${FLATPAK_DEST}/lib/
 	install -Dm644 krosshair.json -t ${FLATPAK_DEST}/share/vulkan/implicit_layer.d/
 	grep -H library_path ${FLATPAK_DEST}/share/vulkan/implicit_layer.d/krosshair.json
