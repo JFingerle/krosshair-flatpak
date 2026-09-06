@@ -1,0 +1,29 @@
+id: org.freedesktop.Platform.VulkanLayer.krosshair
+branch: "26.08"
+runtime: org.freedesktop.Platform
+runtime-version: "26.08"
+sdk: org.freedesktop.Sdk
+build-extension: true
+separate-locales: false
+appstream-compose: false
+modules:
+  - name: krosshair
+    buildsystem: simple
+    build-commands:
+      - make flatpak-install
+    sources:
+      - type: file
+        path: Makefile
+      - type: file
+        path: krosshair.json
+      - type: file
+        path: LICENSE
+      - type: dir
+        path: src
+        dest: src
+      - type: dir
+        path: include
+        dest: include
+      - type: dir
+        path: shaders
+        dest: shaders
