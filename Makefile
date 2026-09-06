@@ -21,6 +21,8 @@ FLATPAK_BUNDLE_ID = org.freedesktop.Platform.VulkanLayer.krosshair
 FLATPAK_VERSIONS = 24.08 25.08 26.08
 FLATPAK_LIB_PATH = /usr/lib/extensions/vulkan/krosshair/lib/krosshair.so
 FLATPAK_MANIST_FILE = flatpak/$(FLATPAK_BUNDLE_ID).yml
+FLATPAK_METAINFO_FILE = flatpak/$(FLATPAK_BUNDLE_ID).metainfo.xml
+PKGVERSION := $(shell grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)
 
 
 .PHONY: all release clean install flatpak-build flatpak-install flatpak-install-system flatpak-install-user
@@ -44,7 +46,13 @@ clean:
 # Builds the flatpak into $(BUILD_DIR) (does NOT install it on the host).
 flatpak-build:
 	mkdir -p $(FLATPAK_BUILD_DIR)
-	git diff --exit-code $(FLATPAK_MANIST_FILE) || { echo "ERROR: $(FLATPAK_MANIST_FILE) has uncommitted changes"; exit 1; }
+
+	# Check and abort if the manifest or metainfo file contain uncommited changes. This is necessary as the build will temporily modify the files during the build.
+	git diff --exit-code $(FLATPAK_MANIST_FILE) $(FLATPAK_METAINFO_FILE) || { echo "ERROR: $(FLATPAK_MANIST_FILE) or $(FLATPAK_METAINFO_FILE) has uncommitted changes"; exit 1; }
+
+	# Modify the metainfo file.
+	sed -i "s|<release version=\"[^\"]*\" date=\"[^\"]*\"/>|<release version=\"$(PKGVERSION)\" date=\"$$(date +%Y-%m-%d)\"/>|" $(FLATPAK_METAINFO_FILE) || exit 1;
+
 	for VER in $(FLATPAK_VERSIONS); do \
 		echo -e "\n-----\nBuilding flatpak for version \"$$VER\"...\n-----\n"; \
 		mkdir -p $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER || exit 1; \
@@ -63,7 +71,7 @@ flatpak-build:
 		echo -e "\n-----\nRunning flatpak build-bundle for \"$$VER\"...\n-----\n"; \
 		flatpak build-bundle --runtime $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak $(FLATPAK_BUNDLE_ID) $$VER || exit 1; \
 	done
-	git checkout -- $(FLATPAK_MANIST_FILE)
+	git checkout -- $(FLATPAK_MANIST_FILE) $(FLATPAK_METAINFO_FILE)
 
 # Installs the flatpak for the current user
 flatpak-install-user: flatpak-build

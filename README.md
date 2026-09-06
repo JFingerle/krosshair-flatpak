@@ -20,7 +20,7 @@ yay -S krosshair
 ```bash
 git clone https://github.com/noahlyk/krosshair.git
 cd krosshair
-make
+make install
 ```
 
 ### Flatpak
@@ -49,7 +49,7 @@ Add the follwoing launch option:
 KROSSHAIR=1 %command%
 ```
 
-To use a custom crosshair:
+To use a custom crosshair (from the `crosshairs` dir of this repo):
 
 ```
 KROSSHAIR=1 KROSSHAIR_IMG=/optional/path/to/crosshair.png %command%
@@ -59,7 +59,7 @@ KROSSHAIR=1 KROSSHAIR_IMG=/optional/path/to/crosshair.png %command%
 
 ```bash
 export KROSSHAIR=1
-#export KROSSHAIR_IMG=/path/to/crosshair.png # To use a custom crosshair
+#export KROSSHAIR_IMG=/path/to/crosshair.png # To use a custom crosshair (from the `crosshairs` dir of this repo)
 your-game
 ```
 
