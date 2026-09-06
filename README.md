@@ -1,21 +1,23 @@
-# krosshair - Crosshair overlay for Games on Linux
+# krosshair - Crosshair Overlay for Games on Linux
 
 * Works with **Steam and non-Steam games**.
 * Works on **native and Flatpak** installations (e.g. Bazitte / Steam Deck / SteamOS).
 
-----
-
+# Demo
+Screenshot showing the default crosshair. To use a different crosshair place one of the files in repo dir `crosshairs` at `~/.config/crosshair-maker/projects/current.png` or use env var `KROSSHAIR_IMG` to load it from a different location.
+<br><br>
 <img src="img/quake-crosshair.png" alt="quake" width="800"/>
+<br>
 
-## Installation
+# Installation
 
-### Arch Linux AUR
+## Arch Linux AUR
 
 ```bash
 yay -S krosshair
 ```
 
-### From source
+## From source
 
 ```bash
 git clone https://github.com/noahlyk/krosshair.git
@@ -23,7 +25,7 @@ cd krosshair
 make install
 ```
 
-### Flatpak
+## Flatpak
 
 Builds and installs Flatpak bundles for the supported runtime versions (24.08, 25.08, 26.08).
 
@@ -39,9 +41,9 @@ make flatpak-install-user
 make flatpak-install-system
 ```
 
-## Usage
+# Usage
 
-### Steam Games
+## Steam Games
 
 Add the follwoing launch option:
 
@@ -55,7 +57,7 @@ To use a custom crosshair (from the `crosshairs` dir of this repo):
 KROSSHAIR=1 KROSSHAIR_IMG=/optional/path/to/crosshair.png %command%
 ```
 
-### Other Games
+## Other Games
 
 ```bash
 export KROSSHAIR=1
@@ -63,7 +65,7 @@ export KROSSHAIR=1
 your-game
 ```
 
-## crosshair-maker integration
+# Make your own crosshairs using `crosshair-maker`
 
 krosshair works out of the box with [crosshair-maker](https://github.com/noahlyk/crosshair-maker), a crosshair overlay creator with SVG rendering and preview. The currently selected crosshair is automatically exported to `~/.config/crosshair-maker/projects/current.png`, which krosshair picks up as its default — just launch your game with `KROSSHAIR=1` and go.
 
@@ -76,6 +78,8 @@ $ yay -Sy krosshair crosshair-maker vulkan-tools
 $ KROSSHAIR=1 vkcube &
 $ crosshair-maker &
 ```
+
+# FAQ / Various
 
 ## Can i get banned for this?
 I don't know, use at your own risk. I've only used it in Quake Champions and STRAFTAT, both of which don't really have an anticheat.
