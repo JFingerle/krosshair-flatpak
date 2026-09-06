@@ -1,8 +1,11 @@
-# krosshair
-A crosshair overlay for games on linux using vulkan.
+# krosshair - Crosshair overlay for Games on Linux
 
-![max](img/maxterOk-crosshair.png)
-![quake](img/quake-crosshair.png)
+* Works with Steam games and non-Steam games.
+* Works on native or Flatpak installations.
+
+----
+
+<img src="img/quake-crosshair.png" alt="quake" width="800"/>
 
 ## Installation
 
@@ -22,18 +25,27 @@ make
 
 ## Usage
 
-```bash
-export KROSSHAIR=1
-your-game
+### Steam Games
+
+Add the follwoing launch option:
+
+```
+KROSSHAIR=1 KROSSHAIR_IMG=/optional/path/to/crosshair.png %command%
 ```
 
-For Steam games, add `KROSSHAIR=1 %command%` to launch options.
+### Other Games
+
+```bash
+export KROSSHAIR=1
+KROSSHAIR_IMG=/optional/path/to/crosshair.png
+your-game
+```
 
 ## crosshair-maker integration
 
 krosshair works out of the box with [crosshair-maker](https://github.com/fibsussy/crosshair-maker), a crosshair overlay creator with SVG rendering and preview. The currently selected crosshair is automatically exported to `~/.config/crosshair-maker/projects/current.png`, which krosshair picks up as its default — just launch your game with `KROSSHAIR=1` and go.
 
-You can override the image with `export KROSSHAIR_IMG=/path/to/crosshair.png` if you want to use a custom file.
+Use `export KROSSHAIR_IMG=/optional/path/to/crosshair.png` to use a specific crosshair file.
 
 To test the full setup together with `vkcube`:
 
