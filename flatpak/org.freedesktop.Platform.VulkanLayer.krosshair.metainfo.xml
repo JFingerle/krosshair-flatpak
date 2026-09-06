@@ -5,7 +5,7 @@
   <name>krosshair</name>
   <summary>Vulkan layer providing an in-game crosshair overlay</summary>
   <project_license>MIT</project_license>
-  <metadata_license>CC0-1.0</metadata_license>
+  <metadata_license>GPL-3.0</metadata_license>
   <developer id="com.github.krosshair">
     <name>krosshair developers</name>
   </developer>
@@ -16,9 +16,9 @@
       environment variable; disable it with DISABLE_KROSSHAIR=1.
     </p>
   </description>
-  <url type="homepage">https://github.com/REPLACE-ME/krosshair</url>
-  <update_contact>REPLACE-ME_AT_example.org</update_contact>
+  <url type="homepage">https://github.com/noahlyk/krosshair</url>
+  <update_contact>https://github.com/noahlyk/krosshair</update_contact>
   <releases>
-    <release version="0.1.0" date="2025-01-01"/>
+    <release version="0.1.0" date="2026-09-06"/>
   </releases>
 </component>
