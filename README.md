@@ -3,6 +3,11 @@
 * Works with **Steam and non-Steam games**.
 * Works on **native and Flatpak** installations (e.g. Bazitte / Steam Deck / SteamOS).
 
+## This Fork / Differences to `noahlyk/krosshair`
+
+* Rendering fixed on 4K and other resolutions ([PR](https://github.com/noahlyk/krosshair/pull/2)).
+* Flatpak build added ([PR](https://github.com/noahlyk/krosshair/pull/1)).
+
 ----
 
 <img src="img/quake-crosshair.png" alt="quake" width="800"/>
