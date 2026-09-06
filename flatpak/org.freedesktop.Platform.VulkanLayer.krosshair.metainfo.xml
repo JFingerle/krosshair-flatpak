@@ -19,6 +19,6 @@
   <url type="homepage">https://github.com/noahlyk/krosshair</url>
   <update_contact>https://github.com/noahlyk/krosshair</update_contact>
   <releases>
-    <release version="0.1.0" date="2026-09-06"/>
+    <release version="<set_during_build>" date="<set_during_build>"/>
   </releases>
 </component>
