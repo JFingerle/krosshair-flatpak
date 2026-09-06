@@ -20,7 +20,7 @@ FLATPAK_EXPORT_DIR = $(FLATPAK_BUILD_DIR_INTERMEDIATE)/export
 FLATPAK_BUNDLE_ID = org.freedesktop.Platform.VulkanLayer.krosshair
 FLATPAK_VERSIONS = 24.08 25.08 26.08
 FLATPAK_LIB_PATH = /usr/lib/extensions/vulkan/krosshair/lib/krosshair.so
-FLATPAK_MANIST_FILE = $(FLATPAK_BUNDLE_ID).yml
+FLATPAK_MANIST_FILE = flatpak/$(FLATPAK_BUNDLE_ID).yml
 
 
 .PHONY: all release clean install flatpak flatpak-install

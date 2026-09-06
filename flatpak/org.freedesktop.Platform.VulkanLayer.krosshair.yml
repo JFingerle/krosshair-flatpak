@@ -13,17 +13,17 @@ modules:
       - make flatpak-install
     sources:
       - type: file
-        path: Makefile
+        path: ../Makefile
       - type: file
-        path: krosshair.json
+        path: ../krosshair.json
       - type: file
-        path: LICENSE
+        path: ../LICENSE
       - type: dir
-        path: src
+        path: ../src
         dest: src
       - type: dir
-        path: include
+        path: ../include
         dest: include
       - type: dir
-        path: shaders
+        path: ../shaders
         dest: shaders
