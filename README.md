@@ -8,10 +8,16 @@
 * Rendering fixed on 4K and other resolutions ([PR](https://github.com/noahlyk/krosshair/pull/2)).
 * Flatpak build added ([PR](https://github.com/noahlyk/krosshair/pull/1)).
 
-# Demo
+# Demo - Default Dot Crosshair
 Screenshot showing the default crosshair. To use a different crosshair place one of the files in repo dir `crosshairs` at `~/.config/crosshair-maker/projects/current.png` or use env var `KROSSHAIR_IMG` to load it from a different location.
-<br><br>
+
 <img src="img/quake-crosshair.png" alt="quake" width="800"/>
+<br>
+
+# Demo - Anti Motion Sickness Overlay
+This is an overlay (not really a crosshair) which helps against motion sickness in first person games. You can use by copy
+
+<img src="img/demo_anti-motionsickness-1.png" alt="quake" width="800"/>
 <br>
 
 # Installation
@@ -32,7 +38,7 @@ make install
 
 ## Flatpak Installation
 
-Necessary if your games (and apps like Steam / Lutris / Heroic) run via Flatpak. This is for example the case on Bazzite and other immutable Linux distributions. 
+Necessary if your games (and apps like Steam / Lutris / Heroic) run via Flatpak. This is for example the case on Bazzite and other immutable Linux distributions.
 
 ### Option 1: Download Github Release
 - Download **all** .flatpack files from the [releases page](https://github.com/jfingerle/krosshair-flatpak/releases).
@@ -48,6 +54,13 @@ sudo pacman -S flatpak-builder
 git clone https://github.com/jfingerle/krosshair-flatpak.git
 cd krosshair
 make flatpak-install
+```
+
+### Set Permissions
+If you want to use other crosshairs (instead of the default dot crosshair) you need to allow your flatpak apps to (read-only) access dir `~/.config/crosshair-maker/projects`. To set a new default crosshair pick a crosshair from the `crosshairs` dir of this repo and place it at `~/.config/crosshair-maker/projects/current.png`. You can also place multiple crosshairs in the directory and set the env var `KROSSHAIR_IMG` to pick one of them (e.g. `KROSSHAIR_IMG=~/.config/crosshair-maker/projects/plus.png %command%` for Steam games).
+
+```
+flatpak override --user --filesystem=~/.config/crosshair-maker/projects:ro
 ```
 
 # Usage
