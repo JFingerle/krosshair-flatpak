@@ -73,6 +73,8 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Mark workspace as trusted for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Enable Flathub remote
         run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
