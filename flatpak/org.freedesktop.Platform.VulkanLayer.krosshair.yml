@@ -6,6 +6,8 @@ sdk: org.freedesktop.Sdk
 build-extension: true
 separate-locales: false
 appstream-compose: false
+build-options:
+  prefix: /usr/lib/extensions/vulkan/krosshair
 modules:
   - name: krosshair
     buildsystem: simple

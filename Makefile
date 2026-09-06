@@ -69,6 +69,6 @@ flatpak:
 # Builds the layer and stages files into the flatpak output (/app).
 flatpak-install: release
 	sed -i 's|"library_path"[[:space:]]*:[[:space:]]*"[^"]*"|"library_path": "$(FLATPAK_LIB_PATH)"|' krosshair.json
-	install -Dm755 $(LIBRARY) -t /app/lib/
-	install -Dm644 krosshair.json -t /app/share/vulkan/implicit_layer.d/
-	grep -H library_path /app/share/vulkan/implicit_layer.d/krosshair.json
+	install -Dm755 $(LIBRARY) -t ${FLATPAK_DEST}/lib/
+	install -Dm644 krosshair.json -t ${FLATPAK_DEST}/share/vulkan/implicit_layer.d/
+	grep -H library_path ${FLATPAK_DEST}/share/vulkan/implicit_layer.d/krosshair.json
