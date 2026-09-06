@@ -2,7 +2,7 @@
 pkgname=krosshair
 pkgver=0.2.6rc1
 pkgrel=1
-pkgdesc="Crosshair overlay for games on linux using Vulkan"
+pkgdesc="Crosshair overlay for games on Linux using Vulkan"
 arch=('x86_64' 'aarch64')
 url="https://github.com/fibsussy/krosshair"
 license=('GPL3')
