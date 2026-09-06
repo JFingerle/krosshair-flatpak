@@ -60,7 +60,7 @@ flatpak-build:
 		sed -i "s|^runtime-version:.*|runtime-version: \"$$VER\"|" $(FLATPAK_MANIST_FILE) || exit 1; \
 		# flatpak SDK install \
 		echo -e "\n-----\nRunning flatpak install for \"org.freedesktop.Sdk//$$VER\"...\n-----\n"; \
-		flatpak install -y flathub org.freedesktop.Sdk//$$VER || exit 1; \
+		flatpak install --user -y flathub org.freedesktop.Sdk//$$VER || exit 1; \
 		# flatpak-builder \
 		echo -e "\n-----\nRunning flatpak-builder for \"$$VER\"...\n-----\n"; \
 		flatpak-builder --force-clean $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER $(FLATPAK_MANIST_FILE) || exit 1; \
