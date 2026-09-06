@@ -23,7 +23,7 @@ FLATPAK_LIB_PATH = /usr/lib/extensions/vulkan/krosshair/lib/krosshair.so
 FLATPAK_MANIST_FILE = flatpak/$(FLATPAK_BUNDLE_ID).yml
 
 
-.PHONY: all release clean install flatpak flatpak-install flatpak-install-host
+.PHONY: all release clean install flatpak-build flatpak-install flatpak-install-system flatpak-install-user
 
 all:
 	mkdir -p lib
@@ -42,7 +42,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 # Builds the flatpak into $(BUILD_DIR) (does NOT install it on the host).
-flatpak:
+flatpak-build:
 	mkdir -p $(FLATPAK_BUILD_DIR)
 	git diff --exit-code $(FLATPAK_MANIST_FILE) || { echo "ERROR: $(FLATPAK_MANIST_FILE) has uncommitted changes"; exit 1; }
 	for VER in $(FLATPAK_VERSIONS); do \
@@ -65,15 +65,21 @@ flatpak:
 	done
 	git checkout -- $(FLATPAK_MANIST_FILE)
 
-# Convenience target to install all built bundles locally (reinstall-safe).
-flatpak-install-host: flatpak
+# Installs the flatpak for the current user
+flatpak-install-user: flatpak-build
 	for VER in $(FLATPAK_VERSIONS); do \
-		flatpak install -y --reinstall $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak || exit 1; \
+		flatpak install --user -y --reinstall $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak || exit 1; \
+	done
+
+# Installs the flatpak system-wide
+flatpak-install-system: flatpak-build
+	for VER in $(FLATPAK_VERSIONS); do \
+		sudo flatpak install -y --reinstall $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak || exit 1; \
 	done
 
 # Runs inside the flatpak-builder sandbox (invoked from the .yml).
 # Builds the layer and stages files into the flatpak output (/app).
-flatpak-install: release
+flatpak-builder-callback: release
 	sed -i 's|"library_path"[[:space:]]*:[[:space:]]*"[^"]*"|"library_path": "$(FLATPAK_LIB_PATH)"|' krosshair.json
 	install -Dm755 $(LIBRARY) -t ${FLATPAK_DEST}/lib/
 	install -Dm644 krosshair.json -t ${FLATPAK_DEST}/share/vulkan/implicit_layer.d/

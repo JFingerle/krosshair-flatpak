@@ -11,7 +11,7 @@ modules:
   - name: krosshair
     buildsystem: simple
     build-commands:
-      - make flatpak-install
+      - make flatpak-builder-callback
     sources:
       - type: file
         path: ../Makefile
