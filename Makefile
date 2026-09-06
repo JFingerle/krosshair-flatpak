@@ -23,7 +23,7 @@ FLATPAK_LIB_PATH = /usr/lib/extensions/vulkan/krosshair/lib/krosshair.so
 FLATPAK_MANIST_FILE = flatpak/$(FLATPAK_BUNDLE_ID).yml
 
 
-.PHONY: all release clean install flatpak flatpak-install
+.PHONY: all release clean install flatpak flatpak-install flatpak-install-host
 
 all:
 	mkdir -p lib
@@ -58,12 +58,18 @@ flatpak:
 		flatpak-builder --force-clean $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER $(FLATPAK_MANIST_FILE) || exit 1; \
 		# flatpak build-export \
 		echo -e "\n-----\nRunning flatpak build-export for \"$$VER\"...\n-----\n"; \
-		flatpak build-export $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER || exit 1; \
+		flatpak build-export $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER $$VER || exit 1; \
 		# flatpak build-bundle \
 		echo -e "\n-----\nRunning flatpak build-bundle for \"$$VER\"...\n-----\n"; \
-		flatpak build-bundle $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak runtime/$(FLATPAK_BUNDLE_ID)/x86_64/master || exit 1; \
+		flatpak build-bundle --runtime $(FLATPAK_EXPORT_DIR) $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak $(FLATPAK_BUNDLE_ID) $$VER || exit 1; \
 	done
-	git checkout -- $(MANIFEST)
+	git checkout -- $(FLATPAK_MANIST_FILE)
+
+# Convenience target to install all built bundles locally (reinstall-safe).
+flatpak-install-host: flatpak
+	for VER in $(FLATPAK_VERSIONS); do \
+		flatpak install -y --reinstall $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak || exit 1; \
+	done
 
 # Runs inside the flatpak-builder sandbox (invoked from the .yml).
 # Builds the layer and stages files into the flatpak output (/app).
