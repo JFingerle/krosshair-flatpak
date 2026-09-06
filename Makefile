@@ -25,8 +25,17 @@ FLATPAK_MANIST_FILE = flatpak/$(FLATPAK_BUNDLE_ID).yml
 FLATPAK_METAINFO_FILE = flatpak/$(FLATPAK_BUNDLE_ID).metainfo.xml
 PKGVERSION := $(shell grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)
 
+# Detect if flathub is available at user level; fall back to system-level
+FLATPAK_USER_REMOTE := $(shell flatpak --user remotes 2>/dev/null | grep -q flathub && echo 1)
 
-.PHONY: all release clean install flatpak-build flatpak-install flatpak-install-system flatpak-install-user
+ifeq ($(FLATPAK_USER_REMOTE),1)
+  FLATPAK_INSTALL = flatpak install --user -y
+else
+  FLATPAK_INSTALL = sudo flatpak install -y
+endif
+
+
+.PHONY: all release clean install flatpak-build flatpak-install
 
 all:
 	mkdir -p lib
@@ -61,7 +70,7 @@ flatpak-build:
 		sed -i "s|^runtime-version:.*|runtime-version: \"$$VER\"|" $(FLATPAK_MANIST_FILE) || exit 1; \
 		# flatpak SDK install \
 		echo -e "\n-----\nRunning flatpak install for \"org.freedesktop.Sdk//$$VER\"...\n-----\n"; \
-		flatpak install --user -y flathub org.freedesktop.Sdk//$$VER || exit 1; \
+		$(FLATPAK_INSTALL) flathub org.freedesktop.Sdk//$$VER || exit 1; \
 		# flatpak-builder \
 		echo -e "\n-----\nRunning flatpak-builder for \"$$VER\"...\n-----\n"; \
 		flatpak-builder --force-clean $(FLATPAK_BUILD_DIR_INTERMEDIATE)/$$VER $(FLATPAK_MANIST_FILE) || exit 1; \
@@ -74,18 +83,10 @@ flatpak-build:
 	done && \
 	git checkout -- $(FLATPAK_MANIST_FILE) $(FLATPAK_METAINFO_FILE) krosshair.json
 
-# Installs the flatpak for the current user
-flatpak-install-user: flatpak-build
+# Installs the flatpak (detects user vs system level automatically)
+flatpak-install: flatpak-build
 	for VER in $(FLATPAK_VERSIONS); do \
-		flatpak install --user -y --reinstall $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak || exit 1; \
-	done
-	echo -e "\n-----\nInstalled flatpak packages\n-----\n"
-	flatpak list  | grep krosshair
-
-# Installs the flatpak system-wide
-flatpak-install-system: flatpak-build
-	for VER in $(FLATPAK_VERSIONS); do \
-		sudo flatpak install -y --reinstall $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak || exit 1; \
+		$(FLATPAK_INSTALL) --reinstall $(FLATPAK_BUILD_DIR)/$(FLATPAK_BUNDLE_ID)_$$VER.flatpak || exit 1; \
 	done
 	echo -e "\n-----\nInstalled flatpak packages\n-----\n"
 	flatpak list  | grep krosshair
