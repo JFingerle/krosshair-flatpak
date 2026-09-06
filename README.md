@@ -32,7 +32,7 @@ make install
 Necessary if your games (and apps like Steam / Lutris / Heroic) run via Flatpak. This is for example the case on Bazzite and other immutable Linux distributions. 
 
 ### Option 1: Download Github Release
-- Download **all** .flatpack files from the [releases page](https://github.com/noahlyk/krosshair-flatpak/releases).
+- Download **all** .flatpack files from the [releases page](https://github.com/noahlyk/krosshair/releases).
 - Install via double-clicking the file in your file manager (or run `flatpak install (--user) filename.flatpak` in your terminal).
 
 
