@@ -11,13 +11,15 @@ Screenshot showing the default crosshair. To use a different crosshair place one
 
 # Installation
 
-## Arch Linux AUR
+## Non-Flatpak Installation
+
+## Option 1: Via Arch Linux AUR
 
 ```bash
 yay -S krosshair
 ```
 
-## From source
+## Option 2: Build from Source
 
 ```bash
 git clone https://github.com/noahlyk/krosshair.git
@@ -25,7 +27,16 @@ cd krosshair
 make install
 ```
 
-## Flatpak
+## Flatpak Installation
+
+Necessary if your games (and apps like Steam / Lutris / Heroic) run via Flatpak. This is for example the case on Bazzite and other immutable Linux distributions. 
+
+### Option 1: Download Github Release
+- Download **all** .flatpack files from the [releases page](https://github.com/noahlyk/krosshair-flatpak/releases).
+- Install via double-clicking the file in your file manager (or run `flatpak install (--user) filename.flatpak` in your terminal).
+
+
+### Option 2: Build from Source
 
 Builds and installs Flatpak bundles for the supported runtime versions (24.08, 25.08, 26.08).
 
