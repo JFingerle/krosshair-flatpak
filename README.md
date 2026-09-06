@@ -1,7 +1,7 @@
 # krosshair - Crosshair overlay for Games on Linux
 
-* Works with Steam games and non-Steam games.
-* Works on native or Flatpak installations.
+* Works with **Steam and non-Steam games**.
+* Works on **native and Flatpak** installations (e.g. Bazitte / Steam Deck / SteamOS).
 
 ----
 
@@ -9,7 +9,7 @@
 
 ## Installation
 
-### AUR
+### Arch Linux AUR
 
 ```bash
 yay -S krosshair
@@ -18,9 +18,21 @@ yay -S krosshair
 ### From source
 
 ```bash
-git clone https://github.com/fibsussy/krosshair.git
+git clone https://github.com/noahlyk/krosshair.git
 cd krosshair
 make
+```
+
+### Flatpak
+
+Builds and installs Flatpak bundles for the supported runtime versions (24.08, 25.08, 26.08).
+
+```bash
+sudo pacman -S flatpak-builder
+git clone https://github.com/noahlyk/krosshair.git
+cd krosshair
+make flatpak
+make flatpak-install-host
 ```
 
 ## Usage
@@ -30,6 +42,12 @@ make
 Add the follwoing launch option:
 
 ```
+KROSSHAIR=1 %command%
+```
+
+To use a custom crosshair:
+
+```
 KROSSHAIR=1 KROSSHAIR_IMG=/optional/path/to/crosshair.png %command%
 ```
 
@@ -37,15 +55,15 @@ KROSSHAIR=1 KROSSHAIR_IMG=/optional/path/to/crosshair.png %command%
 
 ```bash
 export KROSSHAIR=1
-KROSSHAIR_IMG=/optional/path/to/crosshair.png
+#export KROSSHAIR_IMG=/path/to/crosshair.png # To use a custom crosshair
 your-game
 ```
 
 ## crosshair-maker integration
 
-krosshair works out of the box with [crosshair-maker](https://github.com/fibsussy/crosshair-maker), a crosshair overlay creator with SVG rendering and preview. The currently selected crosshair is automatically exported to `~/.config/crosshair-maker/projects/current.png`, which krosshair picks up as its default — just launch your game with `KROSSHAIR=1` and go.
+krosshair works out of the box with [crosshair-maker](https://github.com/noahlyk/crosshair-maker), a crosshair overlay creator with SVG rendering and preview. The currently selected crosshair is automatically exported to `~/.config/crosshair-maker/projects/current.png`, which krosshair picks up as its default — just launch your game with `KROSSHAIR=1` and go.
 
-Use `export KROSSHAIR_IMG=/optional/path/to/crosshair.png` to use a specific crosshair file.
+Use `export KROSSHAIR_IMG=/path/to/crosshair.png` to use a specific crosshair file.
 
 To test the full setup together with `vkcube`:
 
