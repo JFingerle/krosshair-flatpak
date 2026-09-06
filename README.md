@@ -33,12 +33,7 @@ Builds and installs Flatpak bundles for the supported runtime versions (24.08, 2
 sudo pacman -S flatpak-builder
 git clone https://github.com/noahlyk/krosshair.git
 cd krosshair
-
-# Option A: Install for the current user
-make flatpak-install-user
-
-# Option B: Install system-wide
-make flatpak-install-system
+make flatpak-install
 ```
 
 # Usage
