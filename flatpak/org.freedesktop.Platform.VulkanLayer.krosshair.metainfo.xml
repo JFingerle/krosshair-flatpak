@@ -4,8 +4,8 @@
   <extends>org.freedesktop.Platform</extends>
   <name>krosshair</name>
   <summary>Vulkan layer providing an in-game crosshair overlay</summary>
-  <project_license>MIT</project_license>
-  <metadata_license>GPL-3.0</metadata_license>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
   <developer id="com.github.krosshair">
     <name>krosshair developers</name>
   </developer>
