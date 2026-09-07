@@ -75,6 +75,10 @@ static int kh_required_key_count;
 static int kh_input_fds[KROSSHAIR_MAX_INPUT_DEVS];
 static int kh_input_fd_count;
 
+/* Minimum hold (ms) before the hotkey fires; a short press toggles, a tap under
+ * this duration cancels. */
+#define KROSSHAIR_HOTKEY_HOLD_MS 50
+
 static int kh_keys_down;        /* bitmask of required keys currently pressed */
 static int kh_combo_active;     /* 1 while the full combo is held */
 static int kh_combo_fired;      /* 1 after we toggled for the current hold (debounce) */
@@ -231,8 +235,8 @@ static void* input_thread_main(void* arg)
         }
 
         /* Dynamic timeout: default 100 ms rescan tick. While the combo is held
-         * and not yet fired, wake exactly at the 250 ms hold boundary even though
-         * held keys emit no new events. No busy-wait. */
+         * and not yet fired, wake exactly at the hold boundary even though held
+         * keys emit no new events. No busy-wait. */
         struct timeval tv;
         long timeout_ms = 100;
         if (kh_combo_active && !kh_combo_fired) {
@@ -240,7 +244,7 @@ static void* input_thread_main(void* arg)
             clock_gettime(CLOCK_MONOTONIC, &t);
             long held_ms = (t.tv_sec - kh_combo_down_ts.tv_sec) * 1000 +
                            (t.tv_nsec - kh_combo_down_ts.tv_nsec) / 1000000;
-            long remain = 250 - held_ms;
+            long remain = KROSSHAIR_HOTKEY_HOLD_MS - held_ms;
             if (remain < 0)
                 remain = 0;
             timeout_ms = remain < 100 ? remain : 100;
@@ -288,7 +292,7 @@ static void* input_thread_main(void* arg)
 
         /* Combo hold-gate: run on EVERY iteration (event and tick paths) so the
          * hold is evaluated even while held keys emit no new events. Toggles once
-         * after 250 ms of continuous hold; releasing before that cancels. */
+         * after a short (~50 ms) hold; releasing before that cancels. */
         {
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
@@ -299,7 +303,7 @@ static void* input_thread_main(void* arg)
                     kh_combo_active = 1;
                     kh_combo_fired = 0;
                     kh_combo_down_ts = now;
-                } else if (!kh_combo_fired && held_ms >= 250) {
+                } else if (!kh_combo_fired && held_ms >= KROSSHAIR_HOTKEY_HOLD_MS) {
                     crosshair_visible ^= 1;
                     kh_combo_fired = 1;
                     KROSSHAIR_LOG("[KROSSHAIR] hotkey fired -> crosshair %s\n",
