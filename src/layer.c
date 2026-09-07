@@ -75,8 +75,10 @@ static int kh_required_key_count;
 static int kh_input_fds[KROSSHAIR_MAX_INPUT_DEVS];
 static int kh_input_fd_count;
 
-static int kh_keys_down;    /* bitmask of required keys currently pressed */
-static int kh_combo_armed;  /* debounce: set after a combo fires, cleared on release */
+static int kh_keys_down;        /* bitmask of required keys currently pressed */
+static int kh_combo_active;     /* 1 while the full combo is held */
+static int kh_combo_fired;      /* 1 after we toggled for the current hold (debounce) */
+static struct timespec kh_combo_down_ts; /* CLOCK_MONOTONIC moment the combo first became fully held */
 static pthread_once_t kh_input_once;
 
 /* Returns the bit index (0..count-1) of `code` within the required-key list, or -1. */
@@ -228,58 +230,85 @@ static void* input_thread_main(void* arg)
                 maxfd = kh_input_fds[i];
         }
 
+        /* Dynamic timeout: default 100 ms rescan tick. While the combo is held
+         * and not yet fired, wake exactly at the 250 ms hold boundary even though
+         * held keys emit no new events. No busy-wait. */
         struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 100000; /* 100 ms: timeout doubles as rescan tick */
+        long timeout_ms = 100;
+        if (kh_combo_active && !kh_combo_fired) {
+            struct timespec t;
+            clock_gettime(CLOCK_MONOTONIC, &t);
+            long held_ms = (t.tv_sec - kh_combo_down_ts.tv_sec) * 1000 +
+                           (t.tv_nsec - kh_combo_down_ts.tv_nsec) / 1000000;
+            long remain = 250 - held_ms;
+            if (remain < 0)
+                remain = 0;
+            timeout_ms = remain < 100 ? remain : 100;
+        }
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000; /* 100 ms default: timeout doubles as rescan tick */
 
         int r = select(maxfd + 1, &set, NULL, NULL, &tv);
         if (r <= 0) {
             /* timeout/error: rescan to catch new / Proton virtual keyboards */
             scan_devices();
             kh_resync_state(); /* self-heal: snap bitmask to kernel reality */
-            continue;
-        }
-
-        for (int i = 0; i < kh_input_fd_count; ++i) {
-            int fd = kh_input_fds[i];
-            if (!FD_ISSET(fd, &set))
-                continue;
-            int gone = 0;
-            for (;;) {
-                struct input_event ev;
-                ssize_t n = read(fd, &ev, sizeof(ev));
-                if (n < 0) {
-                    if (errno == EAGAIN || errno == EINTR)
-                        break; /* buffer drained */
-                    close(fd);
-                    gone = 1;
-                    break;
-                }
-                if (n == 0) { /* EOF: device vanished */
-                    close(fd);
-                    gone = 1;
-                    break;
-                }
-                if (n < (ssize_t)sizeof(ev))
-                    break; /* partial frame; nothing more queued */
-                kh_apply_event(&ev);
-            }
-            if (gone) {
-                kh_input_fds[i] = kh_input_fds[kh_input_fd_count - 1];
-                kh_input_fd_count--;
-                break;
-            }
-        }
-
-        if ((kh_keys_down & need_bits) == need_bits) {
-            if (!kh_combo_armed) {
-                crosshair_visible ^= 1;
-                kh_combo_armed = 1;
-                KROSSHAIR_LOG("[KROSSHAIR] hotkey fired -> crosshair %s\n",
-                              crosshair_visible ? "ON" : "OFF");
-            }
         } else {
-            kh_combo_armed = 0;
+            for (int i = 0; i < kh_input_fd_count; ++i) {
+                int fd = kh_input_fds[i];
+                if (!FD_ISSET(fd, &set))
+                    continue;
+                int gone = 0;
+                for (;;) {
+                    struct input_event ev;
+                    ssize_t n = read(fd, &ev, sizeof(ev));
+                    if (n < 0) {
+                        if (errno == EAGAIN || errno == EINTR)
+                            break; /* buffer drained */
+                        close(fd);
+                        gone = 1;
+                        break;
+                    }
+                    if (n == 0) { /* EOF: device vanished */
+                        close(fd);
+                        gone = 1;
+                        break;
+                    }
+                    if (n < (ssize_t)sizeof(ev))
+                        break; /* partial frame; nothing more queued */
+                    kh_apply_event(&ev);
+                }
+                if (gone) {
+                    kh_input_fds[i] = kh_input_fds[kh_input_fd_count - 1];
+                    kh_input_fd_count--;
+                    break;
+                }
+            }
+        }
+
+        /* Combo hold-gate: run on EVERY iteration (event and tick paths) so the
+         * hold is evaluated even while held keys emit no new events. Toggles once
+         * after 250 ms of continuous hold; releasing before that cancels. */
+        {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            long held_ms = (now.tv_sec - kh_combo_down_ts.tv_sec) * 1000 +
+                           (now.tv_nsec - kh_combo_down_ts.tv_nsec) / 1000000;
+            if ((kh_keys_down & need_bits) == need_bits) {
+                if (!kh_combo_active) {
+                    kh_combo_active = 1;
+                    kh_combo_fired = 0;
+                    kh_combo_down_ts = now;
+                } else if (!kh_combo_fired && held_ms >= 250) {
+                    crosshair_visible ^= 1;
+                    kh_combo_fired = 1;
+                    KROSSHAIR_LOG("[KROSSHAIR] hotkey fired -> crosshair %s\n",
+                                  crosshair_visible ? "ON" : "OFF");
+                }
+            } else {
+                kh_combo_active = 0;
+                kh_combo_fired = 0;
+            }
         }
     }
     return NULL;
