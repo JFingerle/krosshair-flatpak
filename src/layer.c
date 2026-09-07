@@ -7,6 +7,12 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#include <linux/input.h>
 #include <vulkan/vk_layer.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
@@ -14,6 +20,7 @@
 #include <math.h>
 
 #include "../include/dispatch.h"
+#include "../include/keys.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "../include/default_crosshair.h"
 #include "../include/stb_image.h"
@@ -54,6 +61,198 @@
 
 pthread_mutex_t global_lock;
 VkPhysicalDeviceDriverProperties driver_properties = {};
+
+/* ------------------------------------------------------------------
+ * Hotkey toggle state
+ * ------------------------------------------------------------------ */
+static volatile int crosshair_visible = 1;
+
+#define KROSSHAIR_MAX_KEYS 8
+static int kh_required_keys[KROSSHAIR_MAX_KEYS];
+static int kh_required_key_count;
+
+#define KROSSHAIR_MAX_INPUT_DEVS 16
+static int kh_input_fds[KROSSHAIR_MAX_INPUT_DEVS];
+static int kh_input_fd_count;
+
+static int kh_keys_down;    /* bitmask of required keys currently pressed */
+static int kh_combo_armed;  /* debounce: set after a combo fires, cleared on release */
+static pthread_once_t kh_input_once;
+
+/* Returns the bit index (0..count-1) of `code` within the required-key list, or -1. */
+static int kh_key_index(int code)
+{
+    for (int i = 0; i < kh_required_key_count; ++i)
+        if (kh_required_keys[i] == code)
+            return i;
+    return -1;
+}
+
+static void parse_hotkey(void)
+{
+    char buf[256];
+    const char* src = getenv("KROSSHAIR_HOTKEY_TOGGLE");
+    if (!src || src[0] == '\0')
+        src = "SHIFT_R+F9";
+
+    strncpy(buf, src, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    int count = 0;
+    char* tok = strtok(buf, "+");
+    while (tok) {
+        while (*tok == ' ' || *tok == '\t')
+            tok++;
+        char* end = tok + strlen(tok);
+        while (end > tok &&
+               (end[-1] == ' ' || end[-1] == '\t' ||
+                end[-1] == '\r' || end[-1] == '\n'))
+            end--;
+        *end = '\0';
+
+        if (*tok) {
+            int code = kh_key_from_name(tok);
+            if (code < 0) {
+                KROSSHAIR_LOG("[KROSSHAIR] unknown hotkey token '%s', skipping\n", tok);
+            } else {
+                int dup = 0;
+                for (int i = 0; i < count; ++i)
+                    if (kh_required_keys[i] == code)
+                        dup = 1;
+                if (!dup && count < KROSSHAIR_MAX_KEYS)
+                    kh_required_keys[count++] = code;
+            }
+        }
+        tok = strtok(NULL, "+");
+    }
+    kh_required_key_count = count;
+
+    if (count == 0) {
+        kh_required_keys[0] = KEY_RIGHTSHIFT;
+        kh_required_keys[1] = KEY_F9;
+        kh_required_key_count = 2;
+        KROSSHAIR_LOG("[KROSSHAIR] no valid hotkey tokens, using default SHIFT_R+F9\n");
+    }
+}
+
+static void close_devices(void)
+{
+    for (int i = 0; i < kh_input_fd_count; ++i)
+        close(kh_input_fds[i]);
+    kh_input_fd_count = 0;
+}
+
+static int scan_devices(void)
+{
+    close_devices();
+    int count = 0;
+    DIR* d = opendir("/dev/input");
+    if (!d)
+        return 0;
+    struct dirent* ent;
+    while ((ent = readdir(d))) {
+        if (strncmp(ent->d_name, "event", 5) != 0)
+            continue;
+        if (count >= KROSSHAIR_MAX_INPUT_DEVS)
+            break;
+        char path[300];
+        snprintf(path, sizeof(path), "/dev/input/%s", ent->d_name);
+        int fd = open(path, O_RDONLY | O_NONBLOCK);
+        if (fd < 0)
+            continue;
+        int ver = 0;
+        if (ioctl(fd, EVIOCGVERSION, &ver) < 0) {
+            close(fd);
+            continue;
+        }
+        kh_input_fds[count++] = fd;
+    }
+    closedir(d);
+    kh_input_fd_count = count;
+    return count;
+}
+
+static void* input_thread_main(void* arg)
+{
+    (void)arg;
+    int opened = scan_devices();
+    if (opened == 0) {
+        KROSSHAIR_LOG("[KROSSHAIR] no EV_KEY input devices; hotkey disabled\n");
+        return NULL;
+    }
+
+    int need_bits = (1 << kh_required_key_count) - 1;
+
+    for (;;) {
+        fd_set set;
+        FD_ZERO(&set);
+        int maxfd = 0;
+        for (int i = 0; i < kh_input_fd_count; ++i) {
+            FD_SET(kh_input_fds[i], &set);
+            if (kh_input_fds[i] > maxfd)
+                maxfd = kh_input_fds[i];
+        }
+
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000; /* 100 ms: timeout doubles as rescan tick */
+
+        int r = select(maxfd + 1, &set, NULL, NULL, &tv);
+        if (r <= 0) {
+            /* timeout/error: rescan to catch new / Proton virtual keyboards */
+            scan_devices();
+            continue;
+        }
+
+        for (int i = 0; i < kh_input_fd_count; ++i) {
+            int fd = kh_input_fds[i];
+            if (!FD_ISSET(fd, &set))
+                continue;
+            struct input_event ev;
+            ssize_t n = read(fd, &ev, sizeof(ev));
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EINTR)
+                    continue;
+                close(fd);
+                kh_input_fds[i] = kh_input_fds[kh_input_fd_count - 1];
+                kh_input_fd_count--;
+                break;
+            }
+            if (ev.type == EV_KEY) {
+                int bit = kh_key_index(ev.code);
+                if (bit >= 0) {
+                    if (ev.value)
+                        kh_keys_down |= (1 << bit);
+                    else
+                        kh_keys_down &= ~(1 << bit);
+                }
+            }
+        }
+
+        if ((kh_keys_down & need_bits) == need_bits) {
+            if (!kh_combo_armed) {
+                crosshair_visible ^= 1;
+                kh_combo_armed = 1;
+                KROSSHAIR_LOG("[KROSSHAIR] hotkey fired -> crosshair %s\n",
+                              crosshair_visible ? "ON" : "OFF");
+            }
+        } else {
+            kh_combo_armed = 0;
+        }
+    }
+    return NULL;
+}
+
+static void init_input_thread(void)
+{
+    parse_hotkey();
+    pthread_t th;
+    if (pthread_create(&th, NULL, input_thread_main, NULL) != 0) {
+        KROSSHAIR_LOG("[KROSSHAIR] failed to create input thread; hotkey disabled\n");
+        return;
+    }
+    pthread_detach(th);
+}
 
 unsigned char frag_spv[]                           = {
     0x03, 0x02, 0x23, 0x07, 0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x0d, 0x00,
@@ -2182,6 +2381,9 @@ static krosshair_draw_t* render_swapchain_display(
     const VkSemaphore* wait_semaphores, unsigned n_wait_semaphores,
     unsigned image_index)
 {
+        if (!crosshair_visible)
+                return NULL;
+
         device_data_t* device_data = data->device_data;
 
         create_draw(data);
@@ -3255,6 +3457,8 @@ static VkResult overlay_CreateInstance(const VkInstanceCreateInfo* pCreateInfo,
                                        const VkAllocationCallbacks* pAllocator,
                                        VkInstance* pInstance)
 {
+        pthread_once(&kh_input_once, init_input_thread);
+
         VkLayerInstanceCreateInfo* chain_info =
             get_instance_chain_info(pCreateInfo, VK_LAYER_LINK_INFO);
         assert(chain_info->u.pLayerInfo);
