@@ -1,23 +1,30 @@
 # krosshair - Crosshair Overlay for Games on Linux
 
-* Works with **Steam and non-Steam games**.
-* Works on **native and Flatpak** installations (e.g. Bazitte / Steam Deck / SteamOS).
+* Works on **Native / Non-Flatpak** systems (e.g. Arch Linux, CachyOS, Ubuntu etc.)
+* Works on **Flatpak** systems (e.g.Bazitte).
+* Works with **Steam** and **non-Steam** games.
 
-## This Fork / Differences to `noahlyk/krosshair`
 
+## This Fork - Differences to `noahlyk/krosshair`
+
+* Hotkey added to toggle the crosshair (`SHIFT_R+F9` by default, see `Usage` chapter below on how to change this).
 * Rendering fixed on 4K and other resolutions ([PR](https://github.com/noahlyk/krosshair/pull/2)).
 * Flatpak build added ([PR](https://github.com/noahlyk/krosshair/pull/1)).
+
+<br>
 
 # Demo - Default Dot Crosshair
 Screenshot showing the default crosshair. To use a different crosshair place one of the files in repo dir `crosshairs` at `~/.config/crosshair-maker/projects/current.png` or use env var `KROSSHAIR_IMG` to load it from a different location.
 
 <img src="img/quake-crosshair.png" alt="quake" width="800"/>
+
 <br>
 
 # Demo - Anti Motion Sickness Overlay
 This is an overlay (not really a crosshair) which helps against motion sickness in first person games. You can find it in the repo: `crosshairs/anti-motionsickness-1_<resolution>.png`.
 
 <img src="img/demo_anti-motionsickness-1.png" alt="quake" width="800"/>
+
 <br>
 
 # Installation
@@ -56,12 +63,14 @@ cd krosshair
 make flatpak-install
 ```
 
-### Set Permissions
+### Set Flatpak Permissions
 If you want to use other crosshairs (instead of the default dot crosshair) you need to allow your flatpak apps to (read-only) access dir `~/.config/crosshair-maker/projects`. To set a new default crosshair pick a crosshair from the `crosshairs` dir of this repo and place it at `~/.config/crosshair-maker/projects/current.png`. You can also place multiple crosshairs in the directory and set the env var `KROSSHAIR_IMG` to pick one of them (e.g. `KROSSHAIR_IMG=~/.config/crosshair-maker/projects/plus.png %command%` for Steam games).
 
 ```
 flatpak override --user --filesystem=~/.config/crosshair-maker/projects:ro
 ```
+
+<br>
 
 # Usage
 
@@ -87,6 +96,8 @@ export KROSSHAIR=1
 your-game
 ```
 
+<br>
+
 # Make your own crosshairs using `crosshair-maker`
 
 krosshair works out of the box with [crosshair-maker](https://github.com/noahlyk/crosshair-maker), a crosshair overlay creator with SVG rendering and preview. The currently selected crosshair is automatically exported to `~/.config/crosshair-maker/projects/current.png`, which krosshair picks up as its default — just launch your game with `KROSSHAIR=1` and go.
@@ -100,11 +111,12 @@ $ yay -Sy krosshair crosshair-maker vulkan-tools
 $ KROSSHAIR=1 vkcube &
 $ crosshair-maker &
 ```
+<br>
 
 # FAQ / Various
 
 ## Can i get banned for this?
-I don't know, use at your own risk. I've only used it in Quake Champions and STRAFTAT, both of which don't really have an anticheat.
+This project is quite similar to `MangoHud` so it should be safe to use, but use it at your own risk. The original author has so for tested it in Quake Champions and STRAFTAT, both of which don't really have an anticheat.
 
 ## Issues
 As of now, the overlay leaks a bit of memory everytime you alt-tab out of/into the game, as well as everytime the window is being resized and upon resolution changes. It's not a big leak and shouldn't cause any problems, but it's still worth noting.
