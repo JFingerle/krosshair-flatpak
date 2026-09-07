@@ -7,7 +7,7 @@
 
 ## This Fork - Differences to `noahlyk/krosshair`
 
-* Hotkey added to toggle the crosshair (`SHIFT_R+F9` by default, see `Usage` chapter below on how to change this).
+* Hotkey added to toggle the crosshair (press `SHIFT_R` + `F9`, see `Usage` chapter below on how to change the hotkey).
 * Rendering fixed on 4K and other resolutions ([PR](https://github.com/noahlyk/krosshair/pull/2)).
 * Flatpak build added ([PR](https://github.com/noahlyk/krosshair/pull/1)).
 
@@ -88,11 +88,18 @@ To use a custom crosshair (from the `crosshairs` dir of this repo):
 KROSSHAIR=1 KROSSHAIR_IMG=/optional/path/to/crosshair.png %command%
 ```
 
-## Other Games
+To use a different hotkey to toggle the crosshair add the `KROSSHAIR_HOTKEY_TOGGLE` env var like this:
+
+```
+KROSSHAIR=1 KROSSHAIR_HOTKEY_TOGGLE=SHIFT_R+F7 %command%
+```
+
+## Non-Steam Games
 
 ```bash
 export KROSSHAIR=1
 #export KROSSHAIR_IMG=/path/to/crosshair.png # To use a custom crosshair (from the `crosshairs` dir of this repo)
+#export KROSSHAIR_HOTKEY_TOGGLE=SHIFT_R+F7 # To use a different hotkey to toggle the crosshair
 your-game
 ```
 
@@ -118,6 +125,9 @@ $ crosshair-maker &
 ## Can i get banned for this?
 This project is quite similar to `MangoHud` so it should be safe to use, but use it at your own risk. The original author has so for tested it in Quake Champions and STRAFTAT, both of which don't really have an anticheat.
 
-## Issues
+## What hotkeys can I use?
+The hotkey to toggle the crosshair can be set via env var `KROSSHAIR_HOTKEY_TOGGLE`. Any modifier (`shift_l`, `shift_r`, `ctrl_l`, `ctrl_r`, `alt_l`, `alt_r`) can be combined with a letter, digit, `f1`–`f24`, `space`, `tab`, `escape` etc. For example `KROSSHAIR_HOTKEY_TOGGLE=ctrl_r+1`
+
+## Any known issues?
 As of now, the overlay leaks a bit of memory everytime you alt-tab out of/into the game, as well as everytime the window is being resized and upon resolution changes. It's not a big leak and shouldn't cause any problems, but it's still worth noting.
 I've tried fixing it multiple times but have always hit a dead-end. If someone more experienced with vulkan wants to help, take a look at [this issue](https://github.com/krob64/krosshair/issues/1). I know it's a bit of a mess, this whole project is based on a morally questionable apex legends project which i'm unsure if i should link to it here, coupled with me jumping into it right after completing the vulkan tutorial.
