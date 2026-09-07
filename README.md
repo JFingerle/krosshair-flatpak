@@ -15,7 +15,7 @@ Screenshot showing the default crosshair. To use a different crosshair place one
 <br>
 
 # Demo - Anti Motion Sickness Overlay
-This is an overlay (not really a crosshair) which helps against motion sickness in first person games. You can use by copy
+This is an overlay (not really a crosshair) which helps against motion sickness in first person games. You can find it in the repo: `crosshairs/anti-motionsickness-1_<resolution>.png`.
 
 <img src="img/demo_anti-motionsickness-1.png" alt="quake" width="800"/>
 <br>
