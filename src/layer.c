@@ -172,6 +172,41 @@ static int scan_devices(void)
     return count;
 }
 
+/* Applies a single EV_KEY event to the required-keys bitmask. */
+static void kh_apply_event(const struct input_event* ev)
+{
+    if (ev->type != EV_KEY)
+        return;
+    int bit = kh_key_index(ev->code);
+    if (bit < 0)
+        return;
+    if (ev->value)
+        kh_keys_down |= (1 << bit);
+    else
+        kh_keys_down &= ~(1 << bit);
+}
+
+/*
+ * Snap kh_keys_down to the kernel's authoritative per-device key state.
+ * Self-heals any drift (a key UP event lost during a rescan/reopen), so a
+ * stuck bit can never persist past the next 100 ms tick.
+ */
+static void kh_resync_state(void)
+{
+    int mask = 0;
+    unsigned char key_state[(KEY_MAX / 8) + 1];
+    for (int d = 0; d < kh_input_fd_count; ++d) {
+        if (ioctl(kh_input_fds[d], EVIOCGKEY(sizeof key_state), key_state) < 0)
+            continue;
+        for (int k = 0; k < kh_required_key_count; ++k) {
+            int code = kh_required_keys[k];
+            if ((key_state[code / 8] >> (code % 8)) & 1)
+                mask |= (1 << k);
+        }
+    }
+    kh_keys_down = mask;
+}
+
 static void* input_thread_main(void* arg)
 {
     (void)arg;
@@ -201,6 +236,7 @@ static void* input_thread_main(void* arg)
         if (r <= 0) {
             /* timeout/error: rescan to catch new / Proton virtual keyboards */
             scan_devices();
+            kh_resync_state(); /* self-heal: snap bitmask to kernel reality */
             continue;
         }
 
@@ -208,24 +244,30 @@ static void* input_thread_main(void* arg)
             int fd = kh_input_fds[i];
             if (!FD_ISSET(fd, &set))
                 continue;
-            struct input_event ev;
-            ssize_t n = read(fd, &ev, sizeof(ev));
-            if (n < 0) {
-                if (errno == EAGAIN || errno == EINTR)
-                    continue;
-                close(fd);
+            int gone = 0;
+            for (;;) {
+                struct input_event ev;
+                ssize_t n = read(fd, &ev, sizeof(ev));
+                if (n < 0) {
+                    if (errno == EAGAIN || errno == EINTR)
+                        break; /* buffer drained */
+                    close(fd);
+                    gone = 1;
+                    break;
+                }
+                if (n == 0) { /* EOF: device vanished */
+                    close(fd);
+                    gone = 1;
+                    break;
+                }
+                if (n < (ssize_t)sizeof(ev))
+                    break; /* partial frame; nothing more queued */
+                kh_apply_event(&ev);
+            }
+            if (gone) {
                 kh_input_fds[i] = kh_input_fds[kh_input_fd_count - 1];
                 kh_input_fd_count--;
                 break;
-            }
-            if (ev.type == EV_KEY) {
-                int bit = kh_key_index(ev.code);
-                if (bit >= 0) {
-                    if (ev.value)
-                        kh_keys_down |= (1 << bit);
-                    else
-                        kh_keys_down &= ~(1 << bit);
-                }
             }
         }
 
