@@ -77,7 +77,7 @@ static int kh_input_fd_count;
 
 /* Minimum hold (ms) before the hotkey fires; a short press toggles, a tap under
  * this duration cancels. */
-#define KROSSHAIR_HOTKEY_HOLD_MS 50
+#define KROSSHAIR_HOTKEY_HOLD_MS 25
 
 static int kh_keys_down;        /* bitmask of required keys currently pressed */
 static int kh_combo_active;     /* 1 while the full combo is held */
@@ -222,6 +222,13 @@ static void* input_thread_main(void* arg)
         return NULL;
     }
 
+    /* Always-on diagnostics (survive release/-DNDEBUG flatpak build, where
+     * KROSSHAIR_LOG is stripped): confirm which HOLD_MS the live binary is
+     * running and stamp a baseline for the timing marks below. */
+    struct timespec kh_t0;
+    clock_gettime(CLOCK_MONOTONIC, &kh_t0);
+    fprintf(stderr, "[KH] input thread started; HOLD_MS=%d\n", KROSSHAIR_HOTKEY_HOLD_MS);
+
     int need_bits = (1 << kh_required_key_count) - 1;
 
     for (;;) {
@@ -254,8 +261,12 @@ static void* input_thread_main(void* arg)
 
         int r = select(maxfd + 1, &set, NULL, NULL, &tv);
         if (r <= 0) {
-            /* timeout/error: rescan to catch new / Proton virtual keyboards */
-            scan_devices();
+            /* Only rescan on the full 100 ms tick (catches new / Proton
+             * virtual keyboards). The short dynamic hold-timeout just needs
+             * a lightweight state re-check; a full device reopen is slow in
+             * the flatpak sandbox and defeats the 25 ms wake. */
+            if (timeout_ms >= 100)
+                scan_devices();
             kh_resync_state(); /* self-heal: snap bitmask to kernel reality */
         } else {
             for (int i = 0; i < kh_input_fd_count; ++i) {
@@ -280,6 +291,14 @@ static void* input_thread_main(void* arg)
                     }
                     if (n < (ssize_t)sizeof(ev))
                         break; /* partial frame; nothing more queued */
+                    if (ev.type == EV_KEY) {
+                        struct timespec et;
+                        clock_gettime(CLOCK_MONOTONIC, &et);
+                        fprintf(stderr, "[KH] key code=%u val=%d t=%ldms\n",
+                                ev.code, (int)ev.value,
+                                (et.tv_sec - kh_t0.tv_sec) * 1000 +
+                                (et.tv_nsec - kh_t0.tv_nsec) / 1000000);
+                    }
                     kh_apply_event(&ev);
                 }
                 if (gone) {
@@ -292,7 +311,7 @@ static void* input_thread_main(void* arg)
 
         /* Combo hold-gate: run on EVERY iteration (event and tick paths) so the
          * hold is evaluated even while held keys emit no new events. Toggles once
-         * after a short (~50 ms) hold; releasing before that cancels. */
+         * after a short hold; releasing before that cancels. */
         {
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
@@ -303,9 +322,17 @@ static void* input_thread_main(void* arg)
                     kh_combo_active = 1;
                     kh_combo_fired = 0;
                     kh_combo_down_ts = now;
+                    fprintf(stderr, "[KH] combo active t=%ldms\n",
+                            (now.tv_sec - kh_t0.tv_sec) * 1000 +
+                            (now.tv_nsec - kh_t0.tv_nsec) / 1000000);
                 } else if (!kh_combo_fired && held_ms >= KROSSHAIR_HOTKEY_HOLD_MS) {
                     crosshair_visible ^= 1;
                     kh_combo_fired = 1;
+                    fprintf(stderr, "[KH] FIRED held_ms=%ld t=%ldms -> %s\n",
+                            held_ms,
+                            (now.tv_sec - kh_t0.tv_sec) * 1000 +
+                            (now.tv_nsec - kh_t0.tv_nsec) / 1000000,
+                            crosshair_visible ? "ON" : "OFF");
                     KROSSHAIR_LOG("[KROSSHAIR] hotkey fired -> crosshair %s\n",
                                   crosshair_visible ? "ON" : "OFF");
                 }
