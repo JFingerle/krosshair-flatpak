@@ -70,6 +70,7 @@ static volatile int crosshair_visible = 1;
 #define KROSSHAIR_MAX_KEYS 8
 static int kh_required_keys[KROSSHAIR_MAX_KEYS];
 static int kh_required_key_count;
+static char kh_hotkey_display[256];
 
 #define KROSSHAIR_MAX_INPUT_DEVS 16
 static int kh_input_fds[KROSSHAIR_MAX_INPUT_DEVS];
@@ -77,7 +78,7 @@ static int kh_input_fd_count;
 
 /* Minimum hold (ms) before the hotkey fires; a short press toggles, a tap under
  * this duration cancels. */
-#define KROSSHAIR_HOTKEY_HOLD_MS 25
+#define KROSSHAIR_HOTKEY_HOLD_MS 50
 
 static int kh_keys_down;        /* bitmask of required keys currently pressed */
 static int kh_combo_active;     /* 1 while the full combo is held */
@@ -100,6 +101,9 @@ static void parse_hotkey(void)
     const char* src = getenv("KROSSHAIR_HOTKEY_TOGGLE");
     if (!src || src[0] == '\0')
         src = "SHIFT_R+F9";
+
+    strncpy(kh_hotkey_display, src, sizeof(kh_hotkey_display) - 1);
+    kh_hotkey_display[sizeof(kh_hotkey_display) - 1] = '\0';
 
     strncpy(buf, src, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
@@ -222,12 +226,9 @@ static void* input_thread_main(void* arg)
         return NULL;
     }
 
-    /* Always-on diagnostics (survive release/-DNDEBUG flatpak build, where
-     * KROSSHAIR_LOG is stripped): confirm which HOLD_MS the live binary is
-     * running and stamp a baseline for the timing marks below. */
     struct timespec kh_t0;
     clock_gettime(CLOCK_MONOTONIC, &kh_t0);
-    fprintf(stderr, "[KH] input thread started; HOLD_MS=%d\n", KROSSHAIR_HOTKEY_HOLD_MS);
+    fprintf(stderr, "[KH] Krosshair loaded. Hotkey to toggle: '%s' (change via env var 'KROSSHAIR_HOTKEY_TOGGLE').\n", kh_hotkey_display);
 
     int need_bits = (1 << kh_required_key_count) - 1;
 
@@ -291,14 +292,6 @@ static void* input_thread_main(void* arg)
                     }
                     if (n < (ssize_t)sizeof(ev))
                         break; /* partial frame; nothing more queued */
-                    if (ev.type == EV_KEY) {
-                        struct timespec et;
-                        clock_gettime(CLOCK_MONOTONIC, &et);
-                        fprintf(stderr, "[KH] key code=%u val=%d t=%ldms\n",
-                                ev.code, (int)ev.value,
-                                (et.tv_sec - kh_t0.tv_sec) * 1000 +
-                                (et.tv_nsec - kh_t0.tv_nsec) / 1000000);
-                    }
                     kh_apply_event(&ev);
                 }
                 if (gone) {
@@ -322,17 +315,11 @@ static void* input_thread_main(void* arg)
                     kh_combo_active = 1;
                     kh_combo_fired = 0;
                     kh_combo_down_ts = now;
-                    fprintf(stderr, "[KH] combo active t=%ldms\n",
-                            (now.tv_sec - kh_t0.tv_sec) * 1000 +
-                            (now.tv_nsec - kh_t0.tv_nsec) / 1000000);
                 } else if (!kh_combo_fired && held_ms >= KROSSHAIR_HOTKEY_HOLD_MS) {
                     crosshair_visible ^= 1;
                     kh_combo_fired = 1;
-                    fprintf(stderr, "[KH] FIRED held_ms=%ld t=%ldms -> %s\n",
-                            held_ms,
-                            (now.tv_sec - kh_t0.tv_sec) * 1000 +
-                            (now.tv_nsec - kh_t0.tv_nsec) / 1000000,
-                            crosshair_visible ? "ON" : "OFF");
+                    fprintf(stderr, "[KH] Hotkey %s pressed - crosshair will be %s\n",
+                            kh_hotkey_display, crosshair_visible ? "shown" : "hidden");
                     KROSSHAIR_LOG("[KROSSHAIR] hotkey fired -> crosshair %s\n",
                                   crosshair_visible ? "ON" : "OFF");
                 }
@@ -1941,9 +1928,13 @@ static unsigned char* load_apng(const unsigned char* file_data, size_t file_len,
 /* ────────────────── end APNG loader ─────────────────── */
 
 static void ensure_swapchain_crosshair(swapchain_data_t* data,
-                                       VkCommandBuffer cmd_buffer)
+                                        VkCommandBuffer cmd_buffer)
 {
         device_data_t* device_data = data->device_data;
+
+        static int kh_msg_shown_built_in = 0;
+        static int kh_msg_shown_load_fail = 0;
+        static int kh_msg_shown_file_load = 0;
 
         char* crosshair_path = get_crosshair_path();
         int using_file = (crosshair_path != NULL);
@@ -2105,6 +2096,10 @@ static void ensure_swapchain_crosshair(swapchain_data_t* data,
                          * through to stbi_load below */
                         FILE* f = fopen(crosshair_path, "rb");
                         if (!f) {
+                                if (!kh_msg_shown_load_fail) {
+                                        fprintf(stderr, "[KH] Cannot load crosshair image '%s' defined via env var 'KROSSHAIR_IMG'.\n", crosshair_path);
+                                        kh_msg_shown_load_fail = 1;
+                                }
                                 KROSSHAIR_LOG("[KROSSHAIR_ERROR] failed to open: %s\n",
                                               crosshair_path);
                                 free(crosshair_path);
@@ -2176,6 +2171,10 @@ static void ensure_swapchain_crosshair(swapchain_data_t* data,
                 }
 
                 if (!pixels) {
+                        if (!kh_msg_shown_load_fail) {
+                                fprintf(stderr, "[KH] Cannot load crosshair image '%s' defined via env var 'KROSSHAIR_IMG'.\n", crosshair_path);
+                                kh_msg_shown_load_fail = 1;
+                        }
                         KROSSHAIR_LOG(
                             "[KROSSHAIR_ERROR] failed to load crosshair "
                             "image.\n");
@@ -2200,7 +2199,19 @@ static void ensure_swapchain_crosshair(swapchain_data_t* data,
                               crosshair_path,
                               data->crosshair_mtime.tv_sec,
                               data->crosshair_mtime.tv_nsec);
+                if (!kh_msg_shown_file_load) {
+                        const char* reason = getenv("KROSSHAIR_IMG") ?
+                                "Set via env var 'KROSSHAIR_IMG'" :
+                                "Default crosshair location";
+                        fprintf(stderr, "[KH] Loading crosshair from file '%s'. Reason: %s\n",
+                                crosshair_path, reason);
+                        kh_msg_shown_file_load = 1;
+                }
         } else {
+                if (!kh_msg_shown_built_in) {
+                        fprintf(stderr, "[KH] Using built-in crosshair. Load a different crosshair by setting env var 'KROSSHAIR_IMG' to a transparent PNG file.\n");
+                        kh_msg_shown_built_in = 1;
+                }
                 free(crosshair_path);
                 tex_width            = default_crosshair_width;
                 tex_height           = default_crosshair_height;
