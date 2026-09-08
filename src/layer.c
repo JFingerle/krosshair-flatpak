@@ -2096,14 +2096,19 @@ static void ensure_swapchain_crosshair(swapchain_data_t* data,
                          * through to stbi_load below */
                         FILE* f = fopen(crosshair_path, "rb");
                         if (!f) {
+                                int err = errno;
                                 if (!kh_msg_shown_load_fail) {
-                                        fprintf(stderr, "[KH] Cannot load crosshair image '%s' defined via env var 'KROSSHAIR_IMG'.\n", crosshair_path);
+                                        const char* source = getenv("KROSSHAIR_IMG") ?
+                                                "set via env var 'KROSSHAIR_IMG'" : "at default crosshair location";
+                                        fprintf(stderr, "[KH] Cannot load crosshair image '%s' (%s): %s — falling back to the built-in crosshair\n",
+                                                crosshair_path, source, strerror(err));
                                         kh_msg_shown_load_fail = 1;
                                 }
-                                KROSSHAIR_LOG("[KROSSHAIR_ERROR] failed to open: %s\n",
+                                KROSSHAIR_LOG("[KROSSHAIR_ERROR] failed to open: %s — falling back to built-in crosshair\n",
                                               crosshair_path);
                                 free(crosshair_path);
-                                return;
+                                crosshair_path = NULL;
+                                goto fallback_to_built_in;
                         }
 
                         fseek(f, 0, SEEK_END);
@@ -2172,14 +2177,18 @@ static void ensure_swapchain_crosshair(swapchain_data_t* data,
 
                 if (!pixels) {
                         if (!kh_msg_shown_load_fail) {
-                                fprintf(stderr, "[KH] Cannot load crosshair image '%s' defined via env var 'KROSSHAIR_IMG'.\n", crosshair_path);
+                                const char* source = getenv("KROSSHAIR_IMG") ?
+                                        "set via env var 'KROSSHAIR_IMG'" : "at default crosshair location";
+                                fprintf(stderr, "[KH] Cannot load crosshair image '%s' (%s): not a valid image file — falling back to the built-in crosshair\n",
+                                        crosshair_path, source);
                                 kh_msg_shown_load_fail = 1;
                         }
                         KROSSHAIR_LOG(
                             "[KROSSHAIR_ERROR] failed to load crosshair "
-                            "image.\n");
+                            "image — falling back to built-in crosshair.\n");
                         free(crosshair_path);
-                        return;
+                        crosshair_path = NULL;
+                        goto fallback_to_built_in;
                 }
 
                 data->descriptor_set = create_image_with_desc(
@@ -2208,6 +2217,7 @@ static void ensure_swapchain_crosshair(swapchain_data_t* data,
                         kh_msg_shown_file_load = 1;
                 }
         } else {
+                fallback_to_built_in:
                 if (!kh_msg_shown_built_in) {
                         fprintf(stderr, "[KH] Using built-in crosshair. Load a different crosshair by setting env var 'KROSSHAIR_IMG' to a transparent PNG file.\n");
                         kh_msg_shown_built_in = 1;
