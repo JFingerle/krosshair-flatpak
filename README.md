@@ -129,9 +129,37 @@ $ crosshair-maker &
 ## Can i get banned for this?
 This project is quite similar to `MangoHud` so it should be safe to use, but use it at your own risk. The original author has so for tested it in Quake Champions and STRAFTAT, both of which don't really have an anticheat.
 
+## Why does Krosshair not work?
+- Flatpak: Restart your Flatpak apps like Steam/Lutris/Heroic which you use to start your games. Or simply reboot after the installation.
+- Check the logs, see section `Are there any logs which I can use to troubleshoot issues?` below?
+
 ## What hotkeys can I use?
 The hotkey to toggle the crosshair can be set via env var `KROSSHAIR_HOTKEY_TOGGLE`. Any modifier (`shift_l`, `shift_r`, `ctrl_l`, `ctrl_r`, `alt_l`, `alt_r`) can be combined with a letter, digit, `f1`–`f24`, `space`, `tab`, `escape` etc. For example `KROSSHAIR_HOTKEY_TOGGLE=ctrl_r+1`
 
+## Why does it not use my crosshair file?
+The layer prints diagnostic messages to `stderr`. Look for lines starting with `[KH]`:
+
+- `[KH] Loading crosshair from file '<path>'. Reason: ...` — the crosshair loaded successfully from that file.
+- `[KH] Cannot load crosshair image '<path>' (...): <cause> — falling back to the built-in crosshair` — the file failed to load. The `<cause>` says why, e.g. `No such file or directory`, `Permission denied`, or `not a valid image file`. The layer then falls back to the built-in dot crosshair.
+- `[KH] Using built-in crosshair. Load a different crosshair by setting env var 'KROSSHAIR_IMG'...` — no crosshair file was found at the default location (`~/.config/crosshair-maker/projects/current.png`) and `KROSSHAIR_IMG` is not set.
+
+Common causes:
+- **File does not exist** — check the path is correct. If using `KROSSHAIR_IMG`, make sure the file exists at the given path.
+- **Not a valid image** — the file must be a PNG, GIF, or APNG.
+- **Flatpak permissions** — Flatpak apps cannot read arbitrary files. You need to grant access to the crosshair file/dir, e.g.:
+  ```
+  flatpak override --user --filesystem=/path/to/crosshair.png:ro
+  ```
+  Afterwards restart all Flatpak game launchers (Steam, Heroic, Lutris etc.).
+
+## Are there any logs which I can use to troubleshoot issues?
+Krosshair prints `[KH]` log messages to `stderr`.
+- **Native games** — The messages appear directly in the games terminal output.
+- **Steam (Proton) games** — set `PROTON_LOG=1` in a launch option of a game to redirect it's output to a log file. Example launch option:
+  ```
+  PROTON_LOG=1 KROSSHAIR=1 %command%
+  ```
+  The log file is written to `~` (native Steam installation) or `~/.var/app/com.valvesoftware.Steam` (Flatpak installation).
+
 ## Any known issues?
-As of now, the overlay leaks a bit of memory everytime you alt-tab out of/into the game, as well as everytime the window is being resized and upon resolution changes. It's not a big leak and shouldn't cause any problems, but it's still worth noting.
-I've tried fixing it multiple times but have always hit a dead-end. If someone more experienced with vulkan wants to help, take a look at [this issue](https://github.com/krob64/krosshair/issues/1). I know it's a bit of a mess, this whole project is based on a morally questionable apex legends project which i'm unsure if i should link to it here, coupled with me jumping into it right after completing the vulkan tutorial.
+- The [original author krob64](https://github.com/krob64) mentioned a small [memory leak](https://github.com/krob64/krosshair/issues/1). While testing [I](https://github.com/jfingerle) could not reproduce the memory leak (even after alt+tabbing out of the game multiple times, minimizing etc.). [My](https://github.com/jfingerle) assumption is that this issue has been fixed with changes to the code of this fork.
