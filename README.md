@@ -47,6 +47,8 @@ make install
 
 Necessary if your games (and apps like Steam / Lutris / Heroic) run via Flatpak. This is for example the case on Bazzite and other immutable Linux distributions.
 
+After the installation you need to restart all Flatpak apps which you use to run games (Steam, Heroic, Lutris etc.).
+
 ### Option 1: Download Github Release
 - Download **all** .flatpack files from the [releases page](https://github.com/jfingerle/krosshair-flatpak/releases).
 - Install via double-clicking the file in your file manager (or run `flatpak install (--user) filename.flatpak` in your terminal).
@@ -69,6 +71,8 @@ If you want to use other crosshairs (instead of the default dot crosshair) you n
 ```
 flatpak override --user --filesystem=~/.config/crosshair-maker/projects:ro
 ```
+
+Afterwards you need to restart all Flatpak apps which you use to run games (Steam, Heroic, Lutris etc.).
 
 <br>
 
