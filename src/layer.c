@@ -667,6 +667,11 @@ typedef struct krosshair_draw {
 
         int vertex_buffer_initialized;
         int index_buffer_initialized;
+
+        /* 1 while a submit with this slot's fence is in flight (or was
+         * signaled and not yet reset) — the slot must not be reused until
+         * the fence has been waited on and reset */
+        int fence_submitted;
 } krosshair_draw_t;
 
 struct dynamic_push_constants {
@@ -784,7 +789,10 @@ typedef struct swapchain_data {
         int anim_current_frame;
         struct timespec anim_last_frame_time;
 
-        krosshair_draw_t* draw;
+        /* per-image fence ring: one draw object per swapchain image, so a
+         * slot's fence/semaphores/cmd buffer are always idle by the time the
+         * slot is reused (vulkan-tutorial pattern) */
+        krosshair_draw_t* draws[16];
 
         /* ── single dynamic effect mask (optional) ── */
         struct {
@@ -1125,9 +1133,11 @@ static void destroy_swapchain_data(swapchain_data_t* data)
 
         device_data_t* device_data = data->device_data;
 
-        if (data->draw) {
-                destroy_draw(data, data->draw);
-                data->draw = NULL;
+        for (uint32_t i = 0; i < data->n_images; i++) {
+                if (data->draws[i]) {
+                        destroy_draw(data, data->draws[i]);
+                        data->draws[i] = NULL;
+                }
         }
 
         /* descriptor sets are allocated from device-scoped pools that outlive
@@ -2366,39 +2376,19 @@ check_cfg:
         }
 }
 
-/* allocated a krosshair_draw_t instance that must be free'd at the end of its
- * lifetime
- * */
-static void create_draw(swapchain_data_t* data)
+/*
+ * Create one fence-ring slot: a dedicated cmd buffer, fence, and two
+ * semaphores — one slot per swapchain image.  Slots are created once in
+ * setup_swapchain_data and destroyed in destroy_swapchain_data; on a fence
+ * timeout the frame is skipped instead of destroying a slot while its
+ * submit is still in flight.  Each slot has its own cmd buffer (never
+ * shared across slots), allocated from the device-scoped cmd_pool.
+ */
+static krosshair_draw_t* create_draw_slot(swapchain_data_t* data, uint32_t slot)
 {
         device_data_t* device_data = data->device_data;
-        krosshair_draw_t* draw     = data->draw;
 
-        if (draw) {
-                VkResult fence_status = device_data->vtable.GetFenceStatus(
-                    device_data->device, draw->fence);
-                if (fence_status == VK_SUCCESS) {
-                        VK_CHECK(device_data->vtable.ResetFences(
-                            device_data->device, 1, &draw->fence));
-                        return;
-                }
-                if (fence_status == VK_NOT_READY) {
-                        VkResult wait_result = device_data->vtable.WaitForFences(
-                            device_data->device, 1, &draw->fence, VK_TRUE, 100000000);
-                        if (wait_result == VK_SUCCESS) {
-                                VK_CHECK(device_data->vtable.ResetFences(
-                                    device_data->device, 1, &draw->fence));
-                                return;
-                        }
-                }
-                destroy_draw(data, draw);
-                data->draw = NULL;
-        }
-
-        VkSemaphoreCreateInfo sem_info = {};
-        sem_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-        draw           = malloc(sizeof(*draw));
+        krosshair_draw_t* draw = malloc(sizeof(*draw));
         memset(draw, 0, sizeof(*draw));
 
         VkCommandBufferAllocateInfo cmd_buffer_info = {};
@@ -2409,20 +2399,23 @@ static void create_draw(swapchain_data_t* data)
         VK_CHECK(device_data->vtable.AllocateCommandBuffers(
             device_data->device, &cmd_buffer_info, &draw->cmd_buffer));
         VK_CHECK(device_data->set_device_loader_data(device_data->device,
-                                                     draw->cmd_buffer));
+                                                      draw->cmd_buffer));
 
-        VkFenceCreateInfo fence_info = {};
-        fence_info.sType             = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        VK_CHECK(device_data->vtable.CreateFence(
-            device_data->device, &fence_info, NULL, &draw->fence));
-
+        VkSemaphoreCreateInfo sem_info = {};
+        sem_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         VK_CHECK(device_data->vtable.CreateSemaphore(
             device_data->device, &sem_info, NULL, &draw->semaphore));
         VK_CHECK(device_data->vtable.CreateSemaphore(
             device_data->device, &sem_info, NULL,
             &draw->crossengine_semaphore));
 
-        data->draw = draw;
+        VkFenceCreateInfo fence_info = {};
+        fence_info.sType             = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VK_CHECK(device_data->vtable.CreateFence(
+            device_data->device, &fence_info, NULL, &draw->fence));
+
+        data->draws[slot] = draw;
+        return draw;
 }
 
 static void destroy_draw(swapchain_data_t* data, krosshair_draw_t* draw)
@@ -2465,7 +2458,12 @@ static void destroy_draw(swapchain_data_t* data, krosshair_draw_t* draw)
         }
         if (draw->fence != VK_NULL_HANDLE) {
                 device_data->vtable.DestroyFence(device_data->device,
-                                                draw->fence, NULL);
+                                                 draw->fence, NULL);
+        }
+        if (draw->cmd_buffer != VK_NULL_HANDLE) {
+                device_data->vtable.FreeCommandBuffers(device_data->device,
+                                                       device_data->cmd_pool,
+                                                       1, &draw->cmd_buffer);
         }
 
         free(draw);
@@ -2481,11 +2479,27 @@ static krosshair_draw_t* render_swapchain_display(
 
         device_data_t* device_data = data->device_data;
 
-        create_draw(data);
-        krosshair_draw_t* draw = data->draw;
+        krosshair_draw_t* draw = data->draws[image_index];
         if (!draw) {
-                KROSSHAIR_LOG("[KROSSHAIR] create_draw failed, no draw available\n");
+                KROSSHAIR_LOG("[KROSSHAIR] no draw slot for image %u\n", image_index);
                 return NULL;
+        }
+
+        /* Slot reuse: wait for this slot's previous submit to complete
+         * before re-recording its command buffer.  If it does not complete
+         * in time, skip this frame (presented without the overlay
+         * semaphore) — never destroy a slot while its submit is in flight. */
+        if (draw->fence_submitted) {
+                VkResult wait_result = device_data->vtable.WaitForFences(
+                    device_data->device, 1, &draw->fence, VK_TRUE, 100000000);
+                if (wait_result != VK_SUCCESS) {
+                        KROSSHAIR_LOG("[KROSSHAIR] slot %u fence timeout, skipping frame\n",
+                                       image_index);
+                        return NULL;
+                }
+                VK_CHECK(device_data->vtable.ResetFences(
+                    device_data->device, 1, &draw->fence));
+                draw->fence_submitted = 0;
         }
         device_data->vtable.ResetCommandBuffer(draw->cmd_buffer, 0);
 
@@ -2992,6 +3006,7 @@ static krosshair_draw_t* render_swapchain_display(
                                       submit_result);
                         return NULL;
                 }
+                draw->fence_submitted = 1;
         } else {
                 /* wait in the fragment stage until the swapchain image is ready
                  */
@@ -3019,6 +3034,7 @@ static krosshair_draw_t* render_swapchain_display(
                                       submit_result, n_wait_semaphores);
                         return NULL;
                 }
+                draw->fence_submitted = 1;
         }
 
         return draw;
@@ -3502,6 +3518,10 @@ static void setup_swapchain_data(swapchain_data_t* data,
                     device_data->device, &fb_info, NULL,
                     &data->framebuffers[i]));
         }
+
+        /* fence ring: one draw slot per swapchain image */
+        for (uint32_t i = 0; i < n_images; i++)
+                create_draw_slot(data, i);
 }
 
 static void instance_data_map_physical_devices(instance_data_t* instance_data,
