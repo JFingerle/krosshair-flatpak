@@ -1133,6 +1133,13 @@ static void destroy_swapchain_data(swapchain_data_t* data)
 
         device_data_t* device_data = data->device_data;
 
+        /* wait for all in-flight submits (ring slots) to finish before
+         * destroying resources still referenced by a pending present.
+         * Single choke point: both overlay_CreateSwapchainKHR's oldSwapchain
+         * branch and overlay_DestroySwapchainKHR reach here before GPU
+         * teardown. */
+        VK_CHECK(device_data->vtable.DeviceWaitIdle(device_data->device));
+
         for (uint32_t i = 0; i < data->n_images; i++) {
                 if (data->draws[i]) {
                         destroy_draw(data, data->draws[i]);
