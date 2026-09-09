@@ -616,6 +616,27 @@ typedef struct device_data {
         struct queue_data* graphic_queue;
         struct queue_data* queues[16];  // 16 should be enough?
         uint32_t queue_count;
+
+        /* stable GPU resources: created once per device, shared by all
+         * swapchains of that device, destroyed only in overlay_DestroyDevice */
+        VkSampler crosshair_sampler;
+        VkDescriptorSetLayout descriptor_layout;  /* 1 binding, immutable sampler */
+        VkDescriptorPool descriptor_pool;         /* crosshair descriptor sets */
+        VkCommandPool cmd_pool;
+        VkPipelineLayout pipeline_layout;
+
+        /* format-scoped: the pipeline is bound to the render pass, so all
+         * three are (re)created together, only when the app image format
+         * changes (VK_FORMAT_UNDEFINED = "not created yet") */
+        VkFormat render_pass_format;
+        VkRenderPass render_pass;
+        VkPipeline pipeline;
+
+        /* shader-based dynamic effect pipeline (format-scoped as well) */
+        VkDescriptorSetLayout shader_desc_layout;
+        VkDescriptorPool shader_desc_pool;
+        VkPipelineLayout shader_pipeline_layout;
+        VkPipeline shader_pipeline;
 } device_data_t;
 
 typedef struct command_buffer_data {
@@ -736,18 +757,9 @@ typedef struct swapchain_data {
         VkImageView image_views[16];
         VkFramebuffer framebuffers[16];
 
-        VkRenderPass render_pass;
-
-        VkDescriptorPool descriptor_pool;
-        VkDescriptorSetLayout descriptor_layout;
+        /* crosshair descriptor set (allocated from the device-scoped
+         * descriptor_pool; one live set per swapchain) */
         VkDescriptorSet descriptor_set;
-
-        VkSampler crosshair_sampler;
-
-        VkPipelineLayout pipeline_layout;
-        VkPipeline pipeline;
-
-        VkCommandPool cmd_pool;
 
         int crosshair_uploaded;
         VkImage crosshair_image;
@@ -798,13 +810,8 @@ typedef struct swapchain_data {
         VkDeviceMemory game_fb_mem;
         uint32_t game_fb_width, game_fb_height;
 
-        /* separate descriptor set layout + pipeline for shader-based dynamic */
-        VkDescriptorSetLayout shader_desc_layout;
-        VkDescriptorPool shader_desc_pool;
-        VkPipelineLayout shader_pipeline_layout;
-        VkPipeline shader_pipeline;
-
-        /* descriptor set for dynamic mask + game_fb */
+        /* descriptor set for dynamic mask + game_fb (allocated from the
+         * device-scoped shader_desc_pool) */
         VkDescriptorSet shader_mask_desc_set;
 
 } swapchain_data_t;
@@ -932,6 +939,7 @@ static device_data_t* new_device_data(VkDevice device,
                                       instance_data_t* instance)
 {
         device_data_t* device_data = malloc(sizeof(device_data_t));
+        memset(device_data, 0, sizeof(*device_data));
         device_data->instance      = instance;
         device_data->device        = device;
         KROSSHAIR_LOG("[*] mapping data->device obj: %lu %p\n",
@@ -1037,7 +1045,7 @@ static void shutdown_krosshair_image(swapchain_data_t* data)
         }
 
         if (data->descriptor_set) {
-                /* Tear down dynamic mask GPU resources BEFORE resetting the pool,
+                /* Tear down dynamic mask GPU resources BEFORE resetting the pools,
                  * since its descriptor set comes from the same pool and
                  * would become invalid.  shutdown_dynamic_mask only destroys
                  * image/view/memory — the descriptor_set handle is wiped
@@ -1049,14 +1057,17 @@ static void shutdown_krosshair_image(swapchain_data_t* data)
                         data->dynamic_mask.path = NULL;
                 }
 
+                /* descriptor pools are device-scoped (outlive the swapchain) —
+                 * reset them, never destroy them */
                 device_data->vtable.ResetDescriptorPool(device_data->device,
-                                                        data->descriptor_pool, 0);
+                                                        device_data->descriptor_pool,
+                                                        0);
                 data->descriptor_set = VK_NULL_HANDLE;
 
                 /* also reset shader desc pool (shader mask desc set is invalid) */
-                if (data->shader_desc_pool) {
+                if (device_data->shader_desc_pool) {
                         device_data->vtable.ResetDescriptorPool(
-                            device_data->device, data->shader_desc_pool, 0);
+                            device_data->device, device_data->shader_desc_pool, 0);
                         data->shader_mask_desc_set = VK_NULL_HANDLE;
                 }
         }
@@ -1119,6 +1130,23 @@ static void destroy_swapchain_data(swapchain_data_t* data)
                 data->draw = NULL;
         }
 
+        /* descriptor sets are allocated from device-scoped pools that outlive
+         * this swapchain — reset the pools (never destroy them) so the next
+         * swapchain's sets can be allocated.  The crosshair/mask views the
+         * sets reference are destroyed below, after the reset. */
+        data->descriptor_set = VK_NULL_HANDLE;
+        if (device_data->descriptor_pool) {
+                device_data->vtable.ResetDescriptorPool(device_data->device,
+                                                        device_data->descriptor_pool,
+                                                        0);
+        }
+        data->shader_mask_desc_set = VK_NULL_HANDLE;
+        if (device_data->shader_desc_pool) {
+                device_data->vtable.ResetDescriptorPool(device_data->device,
+                                                        device_data->shader_desc_pool,
+                                                        0);
+        }
+
         shutdown_krosshair_image(data);
         shutdown_dynamic_mask(data);
 
@@ -1137,62 +1165,6 @@ static void destroy_swapchain_data(swapchain_data_t* data)
                 device_data->vtable.FreeMemory(device_data->device,
                                                data->game_fb_mem, NULL);
                 data->game_fb_mem = VK_NULL_HANDLE;
-        }
-        if (data->shader_pipeline != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyPipeline(device_data->device,
-                                                   data->shader_pipeline, NULL);
-                data->shader_pipeline = VK_NULL_HANDLE;
-        }
-        if (data->shader_pipeline_layout != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyPipelineLayout(device_data->device,
-                                                          data->shader_pipeline_layout, NULL);
-                data->shader_pipeline_layout = VK_NULL_HANDLE;
-        }
-        if (data->shader_desc_pool != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyDescriptorPool(device_data->device,
-                                                           data->shader_desc_pool, NULL);
-                data->shader_desc_pool = VK_NULL_HANDLE;
-        }
-        if (data->shader_desc_layout != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyDescriptorSetLayout(device_data->device,
-                                                                data->shader_desc_layout, NULL);
-                data->shader_desc_layout = VK_NULL_HANDLE;
-        }
-
-        if (data->descriptor_pool != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyDescriptorPool(device_data->device,
-                                                           data->descriptor_pool, NULL);
-                data->descriptor_pool = VK_NULL_HANDLE;
-        }
-        if (data->descriptor_layout != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyDescriptorSetLayout(device_data->device,
-                                                                data->descriptor_layout, NULL);
-                data->descriptor_layout = VK_NULL_HANDLE;
-        }
-        if (data->crosshair_sampler != VK_NULL_HANDLE) {
-                device_data->vtable.DestroySampler(device_data->device,
-                                                   data->crosshair_sampler, NULL);
-                data->crosshair_sampler = VK_NULL_HANDLE;
-        }
-        if (data->pipeline != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyPipeline(device_data->device,
-                                                   data->pipeline, NULL);
-                data->pipeline = VK_NULL_HANDLE;
-        }
-        if (data->pipeline_layout != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyPipelineLayout(device_data->device,
-                                                          data->pipeline_layout, NULL);
-                data->pipeline_layout = VK_NULL_HANDLE;
-        }
-        if (data->render_pass != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyRenderPass(device_data->device,
-                                                      data->render_pass, NULL);
-                data->render_pass = VK_NULL_HANDLE;
-        }
-        if (data->cmd_pool != VK_NULL_HANDLE) {
-                device_data->vtable.DestroyCommandPool(device_data->device,
-                                                       data->cmd_pool, NULL);
-                data->cmd_pool = VK_NULL_HANDLE;
         }
 
         for (uint32_t i = 0; i < data->n_images; i++) {
@@ -1228,7 +1200,7 @@ static void update_image_descriptor(swapchain_data_t* data,
         device_data_t* device_data       = data->device_data;
 
         VkDescriptorImageInfo desc_image = {};
-        desc_image.sampler               = data->crosshair_sampler;
+        desc_image.sampler               = data->device_data->crosshair_sampler;
         desc_image.imageView             = image_view;
         desc_image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -1308,9 +1280,9 @@ static VkDescriptorSet create_image_with_desc(swapchain_data_t* data,
 
         VkDescriptorSetAllocateInfo alloc_info = {};
         alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        alloc_info.descriptorPool     = data->descriptor_pool;
+        alloc_info.descriptorPool     = data->device_data->descriptor_pool;
         alloc_info.descriptorSetCount = 1;
-        alloc_info.pSetLayouts        = &data->descriptor_layout;
+        alloc_info.pSetLayouts        = &data->device_data->descriptor_layout;
         VK_CHECK(device_data->vtable.AllocateDescriptorSets(
             device_data->device, &alloc_info, &descriptor_set));
 
@@ -2307,9 +2279,9 @@ static void ensure_swapchain_dynamic_mask(swapchain_data_t* data,
                 free(data->dynamic_mask.path);
                 data->dynamic_mask.path = NULL;
                 /* invalidate shader desc set so it gets re-created */
-                if (data->shader_desc_pool) {
+                if (device_data->shader_desc_pool) {
                         device_data->vtable.ResetDescriptorPool(
-                            device_data->device, data->shader_desc_pool, 0);
+                            device_data->device, device_data->shader_desc_pool, 0);
                         data->shader_mask_desc_set = VK_NULL_HANDLE;
                 }
         }
@@ -2354,9 +2326,9 @@ static void ensure_swapchain_dynamic_mask(swapchain_data_t* data,
         KROSSHAIR_LOG("[KROSSHAIR] loaded dynamic mask from: %s\n", mpath);
 
         /* invalidate shader desc set so it gets re-created with new image view */
-        if (data->shader_desc_pool) {
+        if (device_data->shader_desc_pool) {
                 device_data->vtable.ResetDescriptorPool(
-                    device_data->device, data->shader_desc_pool, 0);
+                    device_data->device, device_data->shader_desc_pool, 0);
                 data->shader_mask_desc_set = VK_NULL_HANDLE;
         }
 
@@ -2431,7 +2403,7 @@ static void create_draw(swapchain_data_t* data)
 
         VkCommandBufferAllocateInfo cmd_buffer_info = {};
         cmd_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cmd_buffer_info.commandPool        = data->cmd_pool;
+        cmd_buffer_info.commandPool        = device_data->cmd_pool;
         cmd_buffer_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cmd_buffer_info.commandBufferCount = 1;
         VK_CHECK(device_data->vtable.AllocateCommandBuffers(
@@ -2519,7 +2491,7 @@ static krosshair_draw_t* render_swapchain_display(
 
         VkRenderPassBeginInfo render_pass_info = {};
         render_pass_info.sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        render_pass_info.renderPass  = data->render_pass;
+        render_pass_info.renderPass  = data->device_data->render_pass;
         render_pass_info.framebuffer = data->framebuffers[image_index];
         render_pass_info.renderArea.extent.width   = data->width;
         render_pass_info.renderArea.extent.height  = data->height;
@@ -2807,7 +2779,8 @@ static krosshair_draw_t* render_swapchain_display(
         }
 
         device_data->vtable.CmdBindPipeline(
-            draw->cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, data->pipeline);
+            draw->cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            data->device_data->pipeline);
 
         VkDeviceSize offsets[1] = {0};
         device_data->vtable.CmdBindVertexBuffers(draw->cmd_buffer, 0, 1,
@@ -2833,7 +2806,8 @@ static krosshair_draw_t* render_swapchain_display(
 
         device_data->vtable.CmdBindDescriptorSets(
             draw->cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            data->pipeline_layout, 0, 1, &data->descriptor_set, 0, NULL);
+            data->device_data->pipeline_layout, 0, 1, &data->descriptor_set, 0,
+            NULL);
         device_data->vtable.CmdDrawIndexed(draw->cmd_buffer,
                                             sizeof(indices) / sizeof(indices[0]),
                                             1, 0, 0, 0);
@@ -2842,7 +2816,8 @@ static krosshair_draw_t* render_swapchain_display(
          * Uses the shader pipeline that samples the game FB copy.
          * Only runs if the dynamic mask is uploaded and the shader pipeline exists.
          */
-if (data->dynamic_mask.uploaded && data->shader_pipeline && data->game_fb_image_view) {
+        if (data->dynamic_mask.uploaded && data->device_data->shader_pipeline &&
+            data->game_fb_image_view) {
                 /* ensure vertex_buffer2 exists for dynamic mask */
                 size_t vtx2_size = sizeof(data->dynamic_mask.vertices);
                 if (draw->vertex_buffer2_size < vtx2_size) {
@@ -2871,7 +2846,7 @@ if (data->dynamic_mask.uploaded && data->shader_pipeline && data->game_fb_image_
 
                 device_data->vtable.CmdBindPipeline(
                     draw->cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    data->shader_pipeline);
+                    data->device_data->shader_pipeline);
 
                 VkDeviceSize mask_offsets[1] = {0};
                 device_data->vtable.CmdBindVertexBuffers(
@@ -2881,20 +2856,20 @@ if (data->dynamic_mask.uploaded && data->shader_pipeline && data->game_fb_image_
                 if (!data->shader_mask_desc_set) {
                         VkDescriptorSetAllocateInfo dsai = {};
                         dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                        dsai.descriptorPool     = data->shader_desc_pool;
+                        dsai.descriptorPool     = data->device_data->shader_desc_pool;
                         dsai.descriptorSetCount = 1;
-                        dsai.pSetLayouts        = &data->shader_desc_layout;
+                        dsai.pSetLayouts        = &data->device_data->shader_desc_layout;
                         VK_CHECK(device_data->vtable.AllocateDescriptorSets(
                             device_data->device, &dsai,
                             &data->shader_mask_desc_set));
 
                         VkDescriptorImageInfo di_mask = {};
-                        di_mask.sampler     = data->crosshair_sampler;
+                        di_mask.sampler     = data->device_data->crosshair_sampler;
                         di_mask.imageView   = data->dynamic_mask.image_view;
                         di_mask.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
                         VkDescriptorImageInfo di_fb = {};
-                        di_fb.sampler     = data->crosshair_sampler;
+                        di_fb.sampler     = data->device_data->crosshair_sampler;
                         di_fb.imageView   = data->game_fb_image_view;
                         di_fb.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -2917,7 +2892,7 @@ if (data->dynamic_mask.uploaded && data->shader_pipeline && data->game_fb_image_
 
                 device_data->vtable.CmdBindDescriptorSets(
                     draw->cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    data->shader_pipeline_layout, 0, 1,
+                    data->device_data->shader_pipeline_layout, 0, 1,
                     &data->shader_mask_desc_set, 0, NULL);
 
                 /* fill quad NDC bounds into push constants */
@@ -2929,7 +2904,7 @@ if (data->dynamic_mask.uploaded && data->shader_pipeline && data->game_fb_image_
                                                     data->dynamic_mask.vertices[0].pos.y;
 
                 device_data->vtable.CmdPushConstants(
-                    draw->cmd_buffer, data->shader_pipeline_layout,
+                    draw->cmd_buffer, data->device_data->shader_pipeline_layout,
                     VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                     sizeof(data->dynamic_pc), &data->dynamic_pc);
 
@@ -3049,9 +3024,184 @@ if (data->dynamic_mask.uploaded && data->shader_pipeline && data->game_fb_image_
         return draw;
 }
 
-static void setup_swapchain_data_pipeline(swapchain_data_t* data)
+/*
+ * GPU resources that do not depend on the swapchain (sampler, descriptor
+ * pools/layouts, command pool, pipeline layouts).  Created once per device
+ * by overlay_CreateDevice, destroyed only in overlay_DestroyDevice.
+ */
+static void create_device_stable_resources(device_data_t* device_data)
 {
-        device_data_t* device_data = data->device_data;
+        VkSamplerCreateInfo sampler_info = {};
+        sampler_info.sType         = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sampler_info.magFilter     = VK_FILTER_LINEAR;
+        sampler_info.minFilter     = VK_FILTER_LINEAR;
+        sampler_info.mipmapMode    = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sampler_info.addressModeU  = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sampler_info.addressModeV  = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sampler_info.addressModeW  = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sampler_info.minLod        = -1000;
+        sampler_info.maxLod        = 1000;
+        sampler_info.maxAnisotropy = 1;
+        VK_CHECK(device_data->vtable.CreateSampler(device_data->device,
+                                                   &sampler_info, NULL,
+                                                   &device_data->crosshair_sampler));
+
+        VkDescriptorPoolSize sampler_pool_size = {};
+        sampler_pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sampler_pool_size.descriptorCount         = 1 + 1; /* crosshair + dynamic mask */
+
+        VkDescriptorPoolCreateInfo desc_pool_info = {};
+        desc_pool_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        desc_pool_info.maxSets = 1 + 1;
+        desc_pool_info.poolSizeCount = 1;
+        desc_pool_info.pPoolSizes    = &sampler_pool_size;
+        VK_CHECK(device_data->vtable.CreateDescriptorPool(
+            device_data->device, &desc_pool_info, NULL,
+            &device_data->descriptor_pool));
+
+        VkSampler sampler                    = device_data->crosshair_sampler;
+        VkDescriptorSetLayoutBinding binding = {};
+        binding.descriptorType     = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binding.descriptorCount    = 1;
+        binding.stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
+        binding.pImmutableSamplers = &sampler;
+
+        VkDescriptorSetLayoutCreateInfo set_layout_info = {};
+        set_layout_info.sType =
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        set_layout_info.bindingCount = 1;
+        set_layout_info.pBindings    = &binding;
+        VK_CHECK(device_data->vtable.CreateDescriptorSetLayout(
+            device_data->device, &set_layout_info, NULL,
+            &device_data->descriptor_layout));
+
+        VkPipelineLayoutCreateInfo layout_info = {};
+        layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout_info.setLayoutCount         = 1;
+        layout_info.pSetLayouts            = &device_data->descriptor_layout;
+        layout_info.pushConstantRangeCount = 0;
+        VK_CHECK(device_data->vtable.CreatePipelineLayout(
+            device_data->device, &layout_info, NULL, &device_data->pipeline_layout));
+
+        /* ═══════════════════════════════════════════════════════════
+         * Shader-based dynamic pipeline (Complement, LumaInvert, etc.)
+         * Uses a custom fragment shader that reads the game framebuffer.
+         * ═══════════════════════════════════════════════════════════ */
+        {
+                /* descriptor set layout: binding 0 = mask, binding 1 = game FB */
+                VkDescriptorSetLayoutBinding shader_bindings[2] = {};
+                shader_bindings[0].binding         = 0;
+                shader_bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                shader_bindings[0].descriptorCount = 1;
+                shader_bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+                shader_bindings[0].pImmutableSamplers = &sampler;
+                shader_bindings[1].binding         = 1;
+                shader_bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                shader_bindings[1].descriptorCount = 1;
+                shader_bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+                shader_bindings[1].pImmutableSamplers = &sampler;
+
+                VkDescriptorSetLayoutCreateInfo sdl_info = {};
+                sdl_info.sType =
+                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+                sdl_info.bindingCount = 2;
+                sdl_info.pBindings    = shader_bindings;
+                VK_CHECK(device_data->vtable.CreateDescriptorSetLayout(
+                    device_data->device, &sdl_info, NULL,
+                    &device_data->shader_desc_layout));
+
+                /* push constant range: full dynamic_push_constants (80 bytes) */
+                VkPushConstantRange pc_range = {};
+                pc_range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+                pc_range.offset     = 0;
+                pc_range.size       = sizeof(struct dynamic_push_constants);
+
+                VkPipelineLayoutCreateInfo spl_info = {};
+                spl_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+                spl_info.setLayoutCount         = 1;
+                spl_info.pSetLayouts            = &device_data->shader_desc_layout;
+                spl_info.pushConstantRangeCount = 1;
+                spl_info.pPushConstantRanges    = &pc_range;
+                VK_CHECK(device_data->vtable.CreatePipelineLayout(
+                    device_data->device, &spl_info, NULL,
+                    &device_data->shader_pipeline_layout));
+
+                /* descriptor pool for shader dynamic desc set */
+                VkDescriptorPoolSize sp_size = {};
+                sp_size.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                sp_size.descriptorCount = 1 * 2; /* 2 bindings: mask + game_fb */
+
+                VkDescriptorPoolCreateInfo sp_info = {};
+                sp_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                sp_info.maxSets = 1;
+                sp_info.poolSizeCount = 1;
+                sp_info.pPoolSizes    = &sp_size;
+                VK_CHECK(device_data->vtable.CreateDescriptorPool(
+                    device_data->device, &sp_info, NULL,
+                    &device_data->shader_desc_pool));
+        }
+
+        VkCommandPoolCreateInfo cmd_buffer_pool_info = {};
+        cmd_buffer_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cmd_buffer_pool_info.flags =
+            VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        cmd_buffer_pool_info.queueFamilyIndex =
+            device_data->graphic_queue->family_index;
+        VK_CHECK(device_data->vtable.CreateCommandPool(
+            device_data->device, &cmd_buffer_pool_info, NULL,
+            &device_data->cmd_pool));
+}
+
+/*
+ * Format-scoped resources: render pass + crosshair pipeline + shader
+ * pipeline.  The pipelines are bound to the render pass and both are created
+ * from the app's image format, so all three are destroyed and recreated
+ * together when the format changes.
+ */
+static void create_format_resources(device_data_t* device_data)
+{
+        VkFormat format = device_data->render_pass_format;
+
+        VkAttachmentDescription attachment_desc = {};
+        attachment_desc.format                  = format;
+        attachment_desc.samples                 = VK_SAMPLE_COUNT_1_BIT;
+        attachment_desc.loadOp                  = VK_ATTACHMENT_LOAD_OP_LOAD;
+        attachment_desc.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment_desc.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachment_desc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachment_desc.initialLayout =
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment_desc.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        VkAttachmentReference color_attachment = {};
+        color_attachment.attachment            = 0;
+        color_attachment.layout      = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass = {};
+        subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments    = &color_attachment;
+
+        VkSubpassDependency dependency = {};
+        dependency.srcSubpass          = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass          = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        VkRenderPassCreateInfo render_pass_info = {};
+        render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        render_pass_info.attachmentCount = 1;
+        render_pass_info.pAttachments    = &attachment_desc;
+        render_pass_info.subpassCount    = 1;
+        render_pass_info.pSubpasses      = &subpass;
+        render_pass_info.dependencyCount = 1;
+        render_pass_info.pDependencies   = &dependency;
+        VK_CHECK(device_data->vtable.CreateRenderPass(
+            device_data->device, &render_pass_info, NULL,
+            &device_data->render_pass));
+
         VkShaderModule vert_module;
         VkShaderModule frag_module;
 
@@ -3068,58 +3218,6 @@ static void setup_swapchain_data_pipeline(swapchain_data_t* data)
         frag_info.pCode    = (const uint32_t*)frag_spv;
         VK_CHECK(device_data->vtable.CreateShaderModule(
             device_data->device, &frag_info, NULL, &frag_module));
-
-        VkSamplerCreateInfo sampler_info = {};
-        sampler_info.sType         = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        sampler_info.magFilter     = VK_FILTER_LINEAR;
-        sampler_info.minFilter     = VK_FILTER_LINEAR;
-        sampler_info.mipmapMode    = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        sampler_info.addressModeU  = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sampler_info.addressModeV  = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sampler_info.addressModeW  = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sampler_info.minLod        = -1000;
-        sampler_info.maxLod        = 1000;
-        sampler_info.maxAnisotropy = 1;
-        VK_CHECK(device_data->vtable.CreateSampler(device_data->device,
-                                                   &sampler_info, NULL,
-                                                   &data->crosshair_sampler));
-
-        VkDescriptorPoolSize sampler_pool_size = {};
-        sampler_pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sampler_pool_size.descriptorCount         = 1 + 1; /* crosshair + dynamic mask */
-
-        VkDescriptorPoolCreateInfo desc_pool_info = {};
-        desc_pool_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        desc_pool_info.maxSets = 1 + 1;
-        desc_pool_info.poolSizeCount = 1;
-        desc_pool_info.pPoolSizes    = &sampler_pool_size;
-        VK_CHECK(device_data->vtable.CreateDescriptorPool(
-            device_data->device, &desc_pool_info, NULL,
-            &data->descriptor_pool));
-
-        VkSampler sampler                    = data->crosshair_sampler;
-        VkDescriptorSetLayoutBinding binding = {};
-        binding.descriptorType     = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        binding.descriptorCount    = 1;
-        binding.stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
-        binding.pImmutableSamplers = &sampler;
-
-        VkDescriptorSetLayoutCreateInfo set_layout_info = {};
-        set_layout_info.sType =
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        set_layout_info.bindingCount = 1;
-        set_layout_info.pBindings    = &binding;
-        VK_CHECK(device_data->vtable.CreateDescriptorSetLayout(
-            device_data->device, &set_layout_info, NULL,
-            &data->descriptor_layout));
-
-        VkPipelineLayoutCreateInfo layout_info = {};
-        layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layout_info.setLayoutCount         = 1;
-        layout_info.pSetLayouts            = &data->descriptor_layout;
-        layout_info.pushConstantRangeCount = 0;
-        VK_CHECK(device_data->vtable.CreatePipelineLayout(
-            device_data->device, &layout_info, NULL, &data->pipeline_layout));
 
         VkPipelineShaderStageCreateInfo stage[2] = {};
         stage[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -3185,18 +3283,18 @@ static void setup_swapchain_data_pipeline(swapchain_data_t* data)
             VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         ms_info.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-        VkPipelineColorBlendAttachmentState color_attachment = {};
-        color_attachment.blendEnable                         = VK_TRUE;
-        color_attachment.colorWriteMask =
+        VkPipelineColorBlendAttachmentState blend_attachment = {};
+        blend_attachment.blendEnable                       = VK_TRUE;
+        blend_attachment.colorWriteMask =
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        color_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        color_attachment.dstColorBlendFactor =
+        blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blend_attachment.dstColorBlendFactor =
             VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        color_attachment.colorBlendOp                    = VK_BLEND_OP_ADD;
-        color_attachment.srcAlphaBlendFactor             = VK_BLEND_FACTOR_ONE;
-        color_attachment.dstAlphaBlendFactor             = VK_BLEND_FACTOR_ZERO;
-        color_attachment.alphaBlendOp                    = VK_BLEND_OP_ADD;
+        blend_attachment.colorBlendOp                    = VK_BLEND_OP_ADD;
+        blend_attachment.srcAlphaBlendFactor             = VK_BLEND_FACTOR_ONE;
+        blend_attachment.dstAlphaBlendFactor             = VK_BLEND_FACTOR_ZERO;
+        blend_attachment.alphaBlendOp                    = VK_BLEND_OP_ADD;
 
         VkPipelineDepthStencilStateCreateInfo depth_info = {};
         depth_info.sType =
@@ -3206,7 +3304,7 @@ static void setup_swapchain_data_pipeline(swapchain_data_t* data)
         blend_info.sType =
             VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
         blend_info.attachmentCount       = 1;
-        blend_info.pAttachments          = &color_attachment;
+        blend_info.pAttachments          = &blend_attachment;
 
         VkDynamicState dynamic_states[2] = {VK_DYNAMIC_STATE_VIEWPORT,
                                             VK_DYNAMIC_STATE_SCISSOR};
@@ -3229,11 +3327,11 @@ static void setup_swapchain_data_pipeline(swapchain_data_t* data)
         pipeline_info.pDepthStencilState  = &depth_info;
         pipeline_info.pColorBlendState    = &blend_info;
         pipeline_info.pDynamicState       = &dynamic_state;
-        pipeline_info.layout              = data->pipeline_layout;
-        pipeline_info.renderPass          = data->render_pass;
+        pipeline_info.layout              = device_data->pipeline_layout;
+        pipeline_info.renderPass          = device_data->render_pass;
         VK_CHECK(device_data->vtable.CreateGraphicsPipelines(
             device_data->device, VK_NULL_HANDLE, 1, &pipeline_info, NULL,
-            &data->pipeline));
+            &device_data->pipeline));
 
         device_data->vtable.DestroyShaderModule(device_data->device,
                                                 vert_module, NULL);
@@ -3261,57 +3359,8 @@ static void setup_swapchain_data_pipeline(swapchain_data_t* data)
                 VK_CHECK(device_data->vtable.CreateShaderModule(
                     device_data->device, &dfi, NULL, &dyn_frag_mod));
 
-                /* descriptor set layout: binding 0 = mask, binding 1 = game FB */
-                VkDescriptorSetLayoutBinding shader_bindings[2] = {};
-                shader_bindings[0].binding         = 0;
-                shader_bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                shader_bindings[0].descriptorCount = 1;
-                shader_bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-                shader_bindings[0].pImmutableSamplers = &sampler;
-                shader_bindings[1].binding         = 1;
-                shader_bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                shader_bindings[1].descriptorCount = 1;
-                shader_bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-                shader_bindings[1].pImmutableSamplers = &sampler;
-
-                VkDescriptorSetLayoutCreateInfo sdl_info = {};
-                sdl_info.sType =
-                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-                sdl_info.bindingCount = 2;
-                sdl_info.pBindings    = shader_bindings;
-                VK_CHECK(device_data->vtable.CreateDescriptorSetLayout(
-                    device_data->device, &sdl_info, NULL,
-                    &data->shader_desc_layout));
-
-                /* push constant range: full dynamic_push_constants (80 bytes) */
-                VkPushConstantRange pc_range = {};
-                pc_range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-                pc_range.offset     = 0;
-                pc_range.size       = sizeof(struct dynamic_push_constants);
-
-                VkPipelineLayoutCreateInfo spl_info = {};
-                spl_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-                spl_info.setLayoutCount         = 1;
-                spl_info.pSetLayouts            = &data->shader_desc_layout;
-                spl_info.pushConstantRangeCount = 1;
-                spl_info.pPushConstantRanges    = &pc_range;
-                VK_CHECK(device_data->vtable.CreatePipelineLayout(
-                    device_data->device, &spl_info, NULL,
-                    &data->shader_pipeline_layout));
-
-                /* descriptor pool for shader dynamic desc set */
-                VkDescriptorPoolSize sp_size = {};
-                sp_size.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                sp_size.descriptorCount = 1 * 2; /* 2 bindings: mask + game_fb */
-
-                VkDescriptorPoolCreateInfo sp_info = {};
-                sp_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-                sp_info.maxSets = 1;
-                sp_info.poolSizeCount = 1;
-                sp_info.pPoolSizes    = &sp_size;
-                VK_CHECK(device_data->vtable.CreateDescriptorPool(
-                    device_data->device, &sp_info, NULL,
-                    &data->shader_desc_pool));
+                /* desc layout + pool are device-scoped (created in
+                 * create_device_stable_resources) */
 
                 /* shader stages */
                 VkPipelineShaderStageCreateInfo sstage[2] = {};
@@ -3357,17 +3406,49 @@ static void setup_swapchain_data_pipeline(swapchain_data_t* data)
                 spi.pDepthStencilState  = &depth_info;
                 spi.pColorBlendState    = &shader_blend;
                 spi.pDynamicState       = &dynamic_state;
-                spi.layout              = data->shader_pipeline_layout;
-                spi.renderPass          = data->render_pass;
+                spi.layout              = device_data->shader_pipeline_layout;
+                spi.renderPass          = device_data->render_pass;
                 VK_CHECK(device_data->vtable.CreateGraphicsPipelines(
                     device_data->device, VK_NULL_HANDLE, 1, &spi, NULL,
-                    &data->shader_pipeline));
+                    &device_data->shader_pipeline));
 
                 device_data->vtable.DestroyShaderModule(device_data->device,
                                                         dyn_vert_mod, NULL);
                 device_data->vtable.DestroyShaderModule(device_data->device,
                                                         dyn_frag_mod, NULL);
         }
+}
+
+/*
+ * Format guard: create (or recreate on format change) the render pass +
+ * pipelines.  On first call render_pass_format is VK_FORMAT_UNDEFINED, so the
+ * guard falls through to creation.  The pipelines reference the render pass,
+ * so they are destroyed before it.
+ */
+static void ensure_format_resources(device_data_t* device_data, VkFormat format)
+{
+        if (device_data->render_pass_format == format &&
+            device_data->render_pass != VK_NULL_HANDLE)
+                return;
+
+        if (device_data->pipeline != VK_NULL_HANDLE) {
+                device_data->vtable.DestroyPipeline(
+                    device_data->device, device_data->pipeline, NULL);
+                device_data->pipeline = VK_NULL_HANDLE;
+        }
+        if (device_data->shader_pipeline != VK_NULL_HANDLE) {
+                device_data->vtable.DestroyPipeline(
+                    device_data->device, device_data->shader_pipeline, NULL);
+                device_data->shader_pipeline = VK_NULL_HANDLE;
+        }
+        if (device_data->render_pass != VK_NULL_HANDLE) {
+                device_data->vtable.DestroyRenderPass(
+                    device_data->device, device_data->render_pass, NULL);
+                device_data->render_pass = VK_NULL_HANDLE;
+        }
+
+        device_data->render_pass_format = format;
+        create_format_resources(device_data);
 }
 
 static void setup_swapchain_data(swapchain_data_t* data,
@@ -3378,46 +3459,9 @@ static void setup_swapchain_data(swapchain_data_t* data,
         data->height               = pCreateInfo->imageExtent.height;
         data->format               = pCreateInfo->imageFormat;
 
-        VkAttachmentDescription attachment_desc = {};
-        attachment_desc.format                  = pCreateInfo->imageFormat;
-        attachment_desc.samples                 = VK_SAMPLE_COUNT_1_BIT;
-        attachment_desc.loadOp                  = VK_ATTACHMENT_LOAD_OP_LOAD;
-        attachment_desc.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE;
-        attachment_desc.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachment_desc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachment_desc.initialLayout =
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        attachment_desc.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-        VkAttachmentReference color_attachment = {};
-        color_attachment.attachment            = 0;
-        color_attachment.layout      = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkSubpassDescription subpass = {};
-        subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments    = &color_attachment;
-
-        VkSubpassDependency dependency = {};
-        dependency.srcSubpass          = VK_SUBPASS_EXTERNAL;
-        dependency.dstSubpass          = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.srcAccessMask = 0;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-        VkRenderPassCreateInfo render_pass_info = {};
-        render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        render_pass_info.attachmentCount = 1;
-        render_pass_info.pAttachments    = &attachment_desc;
-        render_pass_info.subpassCount    = 1;
-        render_pass_info.pSubpasses      = &subpass;
-        render_pass_info.dependencyCount = 1;
-        render_pass_info.pDependencies   = &dependency;
-        VK_CHECK(device_data->vtable.CreateRenderPass(
-            device_data->device, &render_pass_info, NULL, &data->render_pass));
-
-        setup_swapchain_data_pipeline(data);
+        /* The format-scoped render pass must exist before the framebuffers
+         * that reference it are created */
+        ensure_format_resources(device_data, pCreateInfo->imageFormat);
 
         uint32_t n_images = 0;
         VK_CHECK(device_data->vtable.GetSwapchainImagesKHR(
@@ -3446,7 +3490,7 @@ static void setup_swapchain_data(swapchain_data_t* data,
         VkImageView attachment;
         VkFramebufferCreateInfo fb_info = {};
         fb_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fb_info.renderPass      = data->render_pass;
+        fb_info.renderPass      = device_data->render_pass;
         fb_info.attachmentCount = 1;
         fb_info.pAttachments    = &attachment;
         fb_info.width           = data->width;
@@ -3458,16 +3502,6 @@ static void setup_swapchain_data(swapchain_data_t* data,
                     device_data->device, &fb_info, NULL,
                     &data->framebuffers[i]));
         }
-
-        VkCommandPoolCreateInfo cmd_buffer_pool_info = {};
-        cmd_buffer_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        cmd_buffer_pool_info.flags =
-            VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        cmd_buffer_pool_info.queueFamilyIndex =
-            device_data->graphic_queue->family_index;
-
-        VK_CHECK(device_data->vtable.CreateCommandPool(
-            device_data->device, &cmd_buffer_pool_info, NULL, &data->cmd_pool));
 }
 
 static void instance_data_map_physical_devices(instance_data_t* instance_data,
@@ -3792,6 +3826,10 @@ static VkResult overlay_CreateDevice(VkPhysicalDevice physical_device,
         // driver_properties.pNext = NULL;
 
         device_map_queues(device_data, pCreateInfo);
+
+        /* stable GPU resources (sampler, descriptor pools, cmd pool,
+         * pipeline layouts) — created once per device */
+        create_device_stable_resources(device_data);
 
         return result;
 }
