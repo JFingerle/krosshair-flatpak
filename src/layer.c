@@ -597,6 +597,10 @@ typedef struct instance_data {
         instance_dispatch_table_t vtable;
         VkInstance instance;
         uint32_t api_version;
+        /* next-link destroy: the loader resolves vkDestroyInstance directly
+         * (not via GetInstanceProcAddr), so vtable.DestroyInstance is commonly
+         * NULL — capture the real chain pointer at CreateInstance */
+        PFN_vkDestroyInstance chain_DestroyInstance;
 } instance_data_t;
 
 typedef struct queue_data {
@@ -610,6 +614,10 @@ typedef struct device_data {
         device_dispatch_table_t vtable;
         instance_data_t* instance;
         PFN_vkSetDeviceLoaderData set_device_loader_data;
+        /* next-link destroy: the loader resolves vkDestroyDevice directly
+         * (not via GetDeviceProcAddr), so vtable.DestroyDevice is commonly
+         * NULL — capture the real chain pointer at CreateDevice */
+        PFN_vkDestroyDevice chain_DestroyDevice;
         VkPhysicalDevice physical_device;
         VkDevice device;
         VkPhysicalDeviceProperties properties;
@@ -618,7 +626,11 @@ typedef struct device_data {
         uint32_t queue_count;
 
         /* stable GPU resources: created once per device, shared by all
-         * swapchains of that device, destroyed only in overlay_DestroyDevice */
+         * swapchains of that device, destroyed only in overlay_DestroyDevice.
+         * NOTE: the descriptor pools below are sized maxSets=1, so the layer
+         * assumes a SINGLE swapchain per device (multi-swapchain titles would
+         * exhaust the pools and the bulk reset would invalidate other swapchains'
+         * sets — not supported). */
         VkSampler crosshair_sampler;
         VkDescriptorSetLayout descriptor_layout;  /* 1 binding, immutable sampler */
         VkDescriptorPool descriptor_pool;         /* crosshair descriptor sets */
@@ -934,6 +946,7 @@ static VkLayerInstanceCreateInfo* get_instance_chain_info(
 static instance_data_t* new_instance_data(VkInstance instance)
 {
         instance_data_t* instance_data = malloc(sizeof(instance_data_t));
+        memset(instance_data, 0, sizeof(*instance_data));
         instance_data->instance        = instance;
         KROSSHAIR_LOG("[*] mapping data->instance obj: %lu data: %p\n",
                HKEY(instance_data->instance), (void*)instance_data);
@@ -961,6 +974,7 @@ static cmd_buffer_data_t* new_cmd_buffer_data(VkCommandBuffer cmd_buffer,
                                               device_data_t* device_data)
 {
         cmd_buffer_data_t* cmdbuffer_data = malloc(sizeof(cmd_buffer_data_t));
+        memset(cmdbuffer_data, 0, sizeof(*cmdbuffer_data));
         cmdbuffer_data->device_data       = device_data;
         cmdbuffer_data->cmd_buffer        = cmd_buffer;
         cmdbuffer_data->level             = level;
@@ -1055,9 +1069,16 @@ static void shutdown_krosshair_image(swapchain_data_t* data)
          * gated on the pool handle, NOT on descriptor_set, so the reset can't be
          * skipped by a stale/absent set (the original RC1 gate). A no-op when the
          * pool is already empty (first upload uploads fresh; swapchain teardown
-         * resets pools). The dynamic mask is NOT touched here: it is torn down only
-         * on mask-reload (ensure_swapchain_dynamic_mask) or full swapchain teardown,
-         * so a crosshair hot-reload no longer wipes the mask. */
+         * resets pools).
+         *
+         * KNOWN LIMITATION: the main/shader descriptor pools are device-scoped and
+         * sized maxSets=1, i.e. the layer assumes a SINGLE swapchain per device.
+         * The bulk reset below frees the whole pool; on a (hypothetical) second
+         * swapchain this would invalidate its set. Multi-swapchain titles are not
+         * supported — see device_data_t pools. The dynamic mask is NOT touched
+         * here: it is torn down only on mask-reload (ensure_swapchain_dynamic_mask)
+         * or full swapchain teardown, so a crosshair hot-reload no longer wipes
+         * the mask. */
         if (device_data->descriptor_pool) {
                 device_data->vtable.ResetDescriptorPool(device_data->device,
                                                         device_data->descriptor_pool,
@@ -1174,12 +1195,16 @@ static void destroy_swapchain_data(swapchain_data_t* data)
                                                                 data->framebuffers[i], NULL);
                         data->framebuffers[i] = VK_NULL_HANDLE;
                 }
-                if (data->image_views[i] != VK_NULL_HANDLE) {
+                 if (data->image_views[i] != VK_NULL_HANDLE) {
                         device_data->vtable.DestroyImageView(device_data->device,
-                                                            data->image_views[i], NULL);
+                                                             data->image_views[i], NULL);
                         data->image_views[i] = VK_NULL_HANDLE;
-                }
+                 }
         }
+        /* n_images = 0: the framebuffer/view loop above is the last consumer;
+         * null it so a hypothetical second call to destroy_swapchain_data on
+         * this struct can't double-free the same views/framebuffers. */
+        data->n_images = 0;
 
         if (data->crosshair_path) {
                 free(data->crosshair_path);
@@ -3655,6 +3680,11 @@ static VkResult overlay_CreateInstance(const VkInstanceCreateInfo* pCreateInfo,
         vk_load_instance_commands(instance_data->instance,
                                   fpGetInstanceProcAddr,
                                   &instance_data->vtable);
+        /* capture the next-link DestroyInstance (the vtable entry above is the
+         * gpa-lookup, which the loader commonly leaves NULL) */
+        instance_data->chain_DestroyInstance =
+            (PFN_vkDestroyInstance)fpGetInstanceProcAddr(NULL,
+                                                         "vkDestroyInstance");
         instance_data_map_physical_devices(instance_data, 1);
 
         return result;
@@ -3830,6 +3860,11 @@ static VkResult overlay_CreateDevice(VkPhysicalDevice physical_device,
         device_data->physical_device = physical_device;
         vk_load_device_commands(*pDevice, fpGetDeviceProcAddr,
                                 &device_data->vtable);
+        /* capture the next-link DestroyDevice (the vtable entry above is the
+         * gpa-lookup, which the loader commonly leaves NULL) */
+        device_data->chain_DestroyDevice =
+            (PFN_vkDestroyDevice)fpGetInstanceProcAddr(NULL,
+                                                       "vkDestroyDevice");
 
         instance_data->vtable.GetPhysicalDeviceProperties(
             device_data->physical_device, &device_data->properties);
@@ -3924,8 +3959,14 @@ static VkResult overlay_AllocateCommandBuffers(
                                     device_data);
         }
 
+        /* KNOWN LIMITATION: the vk_obj_map entries above are never unmapped —
+         * there is no vkFreeCommandBuffers interception. The entries accumulate
+         * for the process lifetime (the app frees its command buffers, but the
+         * map keeps the host bookkeeping). Pre-existing; out of scope for this
+         * leak fix. */
+
          return result;
- }
+  }
 
 static void overlay_DestroyDevice(VkDevice device,
                                   const VkAllocationCallbacks* pAllocator)
@@ -3938,7 +3979,7 @@ static void overlay_DestroyDevice(VkDevice device,
                 return;
         }
 
-        PFN_vkDestroyDevice chain_destroy = device_data->vtable.DestroyDevice;
+        PFN_vkDestroyDevice chain_destroy = device_data->chain_DestroyDevice;
 
         /* device-scoped GPU objects (sampler, descriptor pools, cmd pool,
          * layouts, render pass, pipelines) are reclaimed by the driver when
@@ -3977,7 +4018,7 @@ static void overlay_DestroyInstance(VkInstance instance,
         }
 
         PFN_vkDestroyInstance chain_destroy =
-            instance_data->vtable.DestroyInstance;
+            instance_data->chain_DestroyInstance;
 
         /* free the physical-device map entries + asprintf'd names (the (…,0)
          * path is the only place they're freed); must run before freeing
