@@ -802,7 +802,6 @@ typedef struct swapchain_data {
                 VkDeviceMemory mem;
                 VkBuffer upload_buffer;
                 VkDeviceMemory upload_buffer_mem;
-                VkDescriptorSet descriptor_set;
                 char* path;
                 struct timespec mtime;
                 int tex_width;
@@ -1053,11 +1052,10 @@ static void shutdown_krosshair_image(swapchain_data_t* data)
         }
 
         if (data->descriptor_set) {
-                /* Tear down dynamic mask GPU resources BEFORE resetting the pools,
-                 * since its descriptor set comes from the same pool and
-                 * would become invalid.  shutdown_dynamic_mask only destroys
-                 * image/view/memory — the descriptor_set handle is wiped
-                 * by the pool reset below. */
+                /* Tear down dynamic mask GPU resources BEFORE resetting the
+                 * pools: the shader pool reset below invalidates
+                 * shader_mask_desc_set, which still references the mask's
+                 * image view. */
                 shutdown_dynamic_mask(data);
                 data->dynamic_mask.uploaded = 0;
                 if (data->dynamic_mask.path) {
@@ -1121,7 +1119,6 @@ static void shutdown_dynamic_mask(swapchain_data_t* data)
                 data->dynamic_mask.upload_buffer_mem = VK_NULL_HANDLE;
         }
 
-        data->dynamic_mask.descriptor_set = VK_NULL_HANDLE;
         data->dynamic_mask.tex_width = 0;
 }
 
@@ -1282,7 +1279,9 @@ static void create_image(swapchain_data_t* data, VkDescriptorSet descriptor_set,
         VK_CHECK(device_data->vtable.CreateImageView(
             device_data->device, &view_info, NULL, image_view));
 
-        update_image_descriptor(data, *image_view, descriptor_set);
+        if (descriptor_set != VK_NULL_HANDLE) {
+                update_image_descriptor(data, *image_view, descriptor_set);
+        }
 }
 
 static VkDescriptorSet create_image_with_desc(swapchain_data_t* data,
@@ -2320,10 +2319,12 @@ static void ensure_swapchain_dynamic_mask(swapchain_data_t* data,
 
         VkDeviceSize image_size = (VkDeviceSize)tex_width * tex_height * 4;
 
-        data->dynamic_mask.descriptor_set = create_image_with_desc(
-            data, tex_width, tex_height, VK_FORMAT_R8G8B8A8_SRGB,
-            &data->dynamic_mask.image, &data->dynamic_mask.mem,
-            &data->dynamic_mask.image_view);
+        /* no main-pool descriptor set: the mask is drawn via the shader
+         * pipeline using shader_mask_desc_set, which references the mask's
+         * image view directly */
+        create_image(data, VK_NULL_HANDLE, tex_width, tex_height,
+                     VK_FORMAT_R8G8B8A8_SRGB, &data->dynamic_mask.image,
+                     &data->dynamic_mask.mem, &data->dynamic_mask.image_view);
 
         upload_image_data(
             device_data, cmd_buffer, pixels, image_size, tex_width,
@@ -3071,11 +3072,11 @@ static void create_device_stable_resources(device_data_t* device_data)
 
         VkDescriptorPoolSize sampler_pool_size = {};
         sampler_pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sampler_pool_size.descriptorCount         = 1 + 1; /* crosshair + dynamic mask */
+        sampler_pool_size.descriptorCount = 1; /* crosshair only */
 
         VkDescriptorPoolCreateInfo desc_pool_info = {};
         desc_pool_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        desc_pool_info.maxSets = 1 + 1;
+        desc_pool_info.maxSets = 1;
         desc_pool_info.poolSizeCount = 1;
         desc_pool_info.pPoolSizes    = &sampler_pool_size;
         VK_CHECK(device_data->vtable.CreateDescriptorPool(
