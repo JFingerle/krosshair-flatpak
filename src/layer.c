@@ -625,6 +625,7 @@ typedef struct device_data {
         struct queue_data* queues[16];  // 16 should be enough?
         uint32_t queue_count;
         uint32_t swapchain_count; /* live swapchains on this device */
+        void* swapchains[4]; /* live swapchains (maxSets=4), cast to swapchain_data_t* */
 
         /* stable GPU resources: created once per device, shared by all
          * swapchains of that device, destroyed only in overlay_DestroyDevice.
@@ -3639,6 +3640,9 @@ static VkResult overlay_CreateSwapchainKHR(
                     "exceeding that will fail allocation\n",
                     device_data->swapchain_count);
         }
+        if (device_data->swapchain_count < 4)
+                device_data->swapchains[device_data->swapchain_count - 1] =
+                    swapchain_data;
 
         setup_swapchain_data(swapchain_data, pCreateInfo);
 
@@ -3661,6 +3665,14 @@ static void overlay_DestroySwapchainKHR(VkDevice device,
                 destroy_swapchain_data(data);
                 unmap_object(HKEY(data->swapchain));
                 free(data);
+                for (uint32_t i = 0; i < device_data->swapchain_count; i++) {
+                        if (device_data->swapchains[i] == data) {
+                                for (uint32_t j = i; j < device_data->swapchain_count - 1; j++) {
+                                        device_data->swapchains[j] = device_data->swapchains[j + 1];
+                                }
+                                break;
+                        }
+                }
                 if (device_data->swapchain_count > 0) device_data->swapchain_count--;
         }
 
@@ -4001,17 +4013,13 @@ static void overlay_DestroyDevice(VkDevice device,
          * the underlying device is destroyed, so we do not destroy them
          * explicitly here. Only the host bookkeeping must be freed. */
 
-        /* walk the map and tear down any swapchains that survived for this
-         * device (the app can destroy the device while swapchains are still
-         * alive during shutdown). destroy_swapchain_data does the GPU teardown
-         * + host-string frees; unmap + free release the map entries. */
-        for (size_t i = 0; i < MAX_VK_OBJECTS; i++) {
-                if (vk_obj_map.data[i].obj == 0) continue;
-                void* entry_data = vk_obj_map.data[i].data;
-                if (!entry_data) continue;
-                swapchain_data_t* sc =
-                    (swapchain_data_t*)entry_data;
-                if (sc->device_data != device_data) continue;
+        /* tear down any swapchains that survived for this device (the app can
+         * destroy the device while swapchains are still alive during shutdown).
+         * destroy_swapchain_data does the GPU teardown + host-string frees;
+         * unmap + free release the map entries. */
+        for (uint32_t i = 0; i < device_data->swapchain_count; i++) {
+                swapchain_data_t* sc = device_data->swapchains[i];
+                if (!sc) continue;
                 KROSSHAIR_LOG(
                     "[KROSSHAIR] DestroyDevice: tearing down surviving "
                     "swapchain %lu\n", (unsigned long)sc->swapchain);
