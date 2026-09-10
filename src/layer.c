@@ -3665,7 +3665,6 @@ static void overlay_DestroySwapchainKHR(VkDevice device,
         if (data) {
                 destroy_swapchain_data(data);
                 unmap_object(HKEY(data->swapchain));
-                free(data);
                 for (uint32_t i = 0; i < device_data->swapchain_count; i++) {
                         if (device_data->swapchains[i] == data) {
                                 for (uint32_t j = i; j < device_data->swapchain_count - 1; j++) {
@@ -3675,6 +3674,7 @@ static void overlay_DestroySwapchainKHR(VkDevice device,
                         }
                 }
                 if (device_data->swapchain_count > 0) device_data->swapchain_count--;
+                free(data);
         }
 
         device_data->vtable.DestroySwapchainKHR(device_data->device,
