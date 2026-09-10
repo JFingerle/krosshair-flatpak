@@ -4038,7 +4038,7 @@ static void overlay_DestroyDevice(VkDevice device,
                     "[KROSSHAIR] DestroyDevice: tearing down surviving "
                     "swapchain %lu\n", (unsigned long)sc->swapchain);
                 destroy_swapchain_data(sc);
-                vk_map_delete(&vk_obj_map, HKEY(sc->swapchain));
+                unmap_object(HKEY(sc->swapchain));
                 free(sc);
         }
 
