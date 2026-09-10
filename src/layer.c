@@ -3600,8 +3600,28 @@ static swapchain_data_t* new_swapchain_data(VkSwapchainKHR swapchain,
                HKEY(swapchain_data->swapchain), (void*)swapchain_data);
         map_object(HKEY(swapchain_data->swapchain), swapchain_data,
                    "swapchain_data->swapchain");
-        return swapchain_data;
-}
+         return swapchain_data;
+ }
+
+ /* remove `data` from the device's swapchain registry. Only compares the
+  * pointer value — `data` may already be freed when this is called */
+ static void unregister_swapchain(device_data_t* device_data,
+                                  swapchain_data_t* data)
+ {
+         /* registry is capped at the descriptor-pool maxSets */
+         uint32_t stored = device_data->swapchain_count < KROSSHAIR_MAX_SWAPCHAINS
+                               ? device_data->swapchain_count
+                               : KROSSHAIR_MAX_SWAPCHAINS;
+         for (uint32_t i = 0; i < stored; i++) {
+                 if (device_data->swapchains[i] == data) {
+                         for (uint32_t j = i; j + 1 < stored; j++)
+                                 device_data->swapchains[j] =
+                                     device_data->swapchains[j + 1];
+                         break;
+                 }
+         }
+         if (device_data->swapchain_count > 0) device_data->swapchain_count--;
+ }
 
 static VkResult overlay_CreateSwapchainKHR(
     VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo,
@@ -3630,6 +3650,7 @@ static VkResult overlay_CreateSwapchainKHR(
         if (old_swapchain_data) {
                 destroy_swapchain_data(old_swapchain_data);
                 unmap_object(HKEY(old_swapchain_data->swapchain));
+                unregister_swapchain(device_data, old_swapchain_data);
                 free(old_swapchain_data);
         }
 
@@ -3672,18 +3693,7 @@ static void overlay_DestroySwapchainKHR(VkDevice device,
         if (data) {
                 destroy_swapchain_data(data);
                 unmap_object(HKEY(data->swapchain));
-                uint32_t n = device_data->swapchain_count;
-                if (n > KROSSHAIR_MAX_SWAPCHAINS)
-                        n = KROSSHAIR_MAX_SWAPCHAINS; /* registry cap */
-                for (uint32_t i = 0; i < n; i++) {
-                        if (device_data->swapchains[i] == data) {
-                                for (uint32_t j = i; j < device_data->swapchain_count - 1; j++) {
-                                        device_data->swapchains[j] = device_data->swapchains[j + 1];
-                                }
-                                break;
-                        }
-                }
-                if (device_data->swapchain_count > 0) device_data->swapchain_count--;
+                unregister_swapchain(device_data, data);
                 free(data);
         }
 
