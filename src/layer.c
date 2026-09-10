@@ -610,6 +610,7 @@ typedef struct queue_data {
         uint32_t family_index;
 } queue_data_t;
 
+#define KROSSHAIR_MAX_SWAPCHAINS 4 /* must match descriptor pool maxSets */
 typedef struct device_data {
         device_dispatch_table_t vtable;
         instance_data_t* instance;
@@ -625,7 +626,9 @@ typedef struct device_data {
         struct queue_data* queues[16];  // 16 should be enough?
         uint32_t queue_count;
         uint32_t swapchain_count; /* live swapchains on this device */
-        void* swapchains[4]; /* live swapchains (maxSets=4), cast to swapchain_data_t* */
+        void* swapchains[KROSSHAIR_MAX_SWAPCHAINS]; /* live swapchains (one per
+                                                 descriptor-set slot), cast to
+                                                 swapchain_data_t* */
 
         /* stable GPU resources: created once per device, shared by all
          * swapchains of that device, destroyed only in overlay_DestroyDevice.
@@ -3641,7 +3644,11 @@ static VkResult overlay_CreateSwapchainKHR(
                     "exceeding that will fail allocation\n",
                     device_data->swapchain_count);
         }
-        if (device_data->swapchain_count < 4)
+        /* the registry is capped at the descriptor-pool maxSets: only the
+         * first KROSSHAIR_MAX_SWAPCHAINS swapchains are tracked (a 5th
+         * can't allocate a descriptor set anyway), but swapchain_count
+         * stays accurate for the warning above */
+        if (device_data->swapchain_count <= KROSSHAIR_MAX_SWAPCHAINS)
                 device_data->swapchains[device_data->swapchain_count - 1] =
                     swapchain_data;
 
@@ -3665,7 +3672,10 @@ static void overlay_DestroySwapchainKHR(VkDevice device,
         if (data) {
                 destroy_swapchain_data(data);
                 unmap_object(HKEY(data->swapchain));
-                for (uint32_t i = 0; i < device_data->swapchain_count; i++) {
+                uint32_t n = device_data->swapchain_count;
+                if (n > KROSSHAIR_MAX_SWAPCHAINS)
+                        n = KROSSHAIR_MAX_SWAPCHAINS; /* registry cap */
+                for (uint32_t i = 0; i < n; i++) {
                         if (device_data->swapchains[i] == data) {
                                 for (uint32_t j = i; j < device_data->swapchain_count - 1; j++) {
                                         device_data->swapchains[j] = device_data->swapchains[j + 1];
@@ -4018,7 +4028,10 @@ static void overlay_DestroyDevice(VkDevice device,
          * destroy the device while swapchains are still alive during shutdown).
          * destroy_swapchain_data does the GPU teardown + host-string frees;
          * unmap + free release the map entries. */
-        for (uint32_t i = 0; i < device_data->swapchain_count; i++) {
+        uint32_t n = device_data->swapchain_count;
+        if (n > KROSSHAIR_MAX_SWAPCHAINS)
+                n = KROSSHAIR_MAX_SWAPCHAINS; /* registry cap */
+        for (uint32_t i = 0; i < n; i++) {
                 swapchain_data_t* sc = device_data->swapchains[i];
                 if (!sc) continue;
                 KROSSHAIR_LOG(
