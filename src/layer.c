@@ -3928,7 +3928,67 @@ static VkResult overlay_AllocateCommandBuffers(
                                     device_data);
         }
 
-        return result;
+         return result;
+ }
+
+static void overlay_DestroyDevice(VkDevice device,
+                                  const VkAllocationCallbacks* pAllocator)
+{
+        device_data_t* device_data = FIND_OBJ(device_data_t, device);
+        if (!device_data) {
+                KROSSHAIR_LOG(
+                    "[KROSSHAIR] DestroyDevice: no device_data for device %p\n",
+                    (void*)device);
+                return;
+        }
+
+        PFN_vkDestroyDevice chain_destroy = device_data->vtable.DestroyDevice;
+
+        /* device-scoped GPU objects (sampler, descriptor pools, cmd pool,
+         * layouts, render pass, pipelines) are reclaimed by the driver when
+         * the underlying device is destroyed, so we do not destroy them
+         * explicitly here. Only the host bookkeeping must be freed. */
+
+        /* free queue data, iterating queues[] once; graphic_queue aliases
+         * one entry so null it (never freed separately). */
+        device_data->graphic_queue = NULL;
+        for (uint32_t i = 0; i < device_data->queue_count; i++) {
+                if (device_data->queues[i]) {
+                        unmap_object(HKEY(device_data->queues[i]->queue));
+                        free(device_data->queues[i]);
+                        device_data->queues[i] = NULL;
+                }
+        }
+
+        unmap_object(HKEY(device_data->device));
+        free(device_data);
+
+        if (chain_destroy) {
+                chain_destroy(device, pAllocator);
+        }
+}
+
+static void overlay_DestroyInstance(VkInstance instance,
+                                    const VkAllocationCallbacks* pAllocator)
+{
+        instance_data_t* instance_data = FIND_OBJ(instance_data_t, instance);
+        if (!instance_data) {
+                KROSSHAIR_LOG(
+                    "[KROSSHAIR] DestroyInstance: no instance_data for "
+                    "instance %p\n",
+                    (void*)instance);
+                return;
+        }
+
+        PFN_vkDestroyInstance chain_destroy =
+            instance_data->vtable.DestroyInstance;
+
+        unmap_object(HKEY(instance_data->instance));
+        free(instance_data);
+
+        if (chain_destroy) {
+                chain_destroy(instance, pAllocator);
+        }
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
@@ -3948,7 +4008,9 @@ name_to_funcptr_t name_to_funcptr_map[] = {
     {     "vkQueuePresentKHR",        (void*)overlay_QueuePresentKHR},
     {  "vkCreateSwapchainKHR",     (void*)overlay_CreateSwapchainKHR},
     { "vkDestroySwapchainKHR",    (void*)overlay_DestroySwapchainKHR},
-    {        "vkCreateDevice",           (void*)overlay_CreateDevice},
+    {      "vkCreateDevice",           (void*)overlay_CreateDevice},
+    {   "vkDestroyDevice",          (void*)overlay_DestroyDevice},
+    {  "vkDestroyInstance",        (void*)overlay_DestroyInstance},
     {"AllocateCommandBuffers", (void*)overlay_AllocateCommandBuffers}
 };
 
