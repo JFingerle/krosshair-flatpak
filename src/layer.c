@@ -1149,21 +1149,22 @@ static void destroy_swapchain_data(swapchain_data_t* data)
         }
 
         /* descriptor sets are allocated from device-scoped pools that outlive
-         * this swapchain — reset the pools (never destroy them) so the next
-         * swapchain's sets can be allocated.  The crosshair/mask views the
-         * sets reference are destroyed below, after the reset. */
+         * this swapchain. Free this swapchain's sets (targeted) so other
+         * swapchains' sets are not invalidated. The pools are never destroyed
+         * (device-scoped); the crosshair/mask views the sets reference are
+         * destroyed below. */
+        if (data->descriptor_set != VK_NULL_HANDLE) {
+                VkDescriptorSet sets[] = {data->descriptor_set};
+                device_data->vtable.FreeDescriptorSets(
+                    device_data->device, device_data->descriptor_pool, 1, sets);
+        }
         data->descriptor_set = VK_NULL_HANDLE;
-        if (device_data->descriptor_pool) {
-                device_data->vtable.ResetDescriptorPool(device_data->device,
-                                                        device_data->descriptor_pool,
-                                                        0);
+        if (data->shader_mask_desc_set != VK_NULL_HANDLE) {
+                VkDescriptorSet msets[] = {data->shader_mask_desc_set};
+                device_data->vtable.FreeDescriptorSets(
+                    device_data->device, device_data->shader_desc_pool, 1, msets);
         }
         data->shader_mask_desc_set = VK_NULL_HANDLE;
-        if (device_data->shader_desc_pool) {
-                device_data->vtable.ResetDescriptorPool(device_data->device,
-                                                        device_data->shader_desc_pool,
-                                                        0);
-        }
 
         shutdown_krosshair_image(data);
         shutdown_dynamic_mask(data);
