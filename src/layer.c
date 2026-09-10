@@ -1052,30 +1052,15 @@ static void shutdown_krosshair_image(swapchain_data_t* data)
         }
 
         if (data->descriptor_set) {
-                /* Tear down dynamic mask GPU resources BEFORE resetting the
-                 * pools: the shader pool reset below invalidates
-                 * shader_mask_desc_set, which still references the mask's
-                 * image view. */
-                shutdown_dynamic_mask(data);
-                data->dynamic_mask.uploaded = 0;
-                if (data->dynamic_mask.path) {
-                        free(data->dynamic_mask.path);
-                        data->dynamic_mask.path = NULL;
-                }
-
-                /* descriptor pools are device-scoped (outlive the swapchain) —
-                 * reset them, never destroy them */
+                /* the main pool (device-scoped) holds the crosshair set; reset it to
+                 * free the slot — never destroy it. The dynamic mask is NOT touched
+                 * here: it is torn down only on mask-reload
+                 * (ensure_swapchain_dynamic_mask) or full swapchain teardown, so a
+                 * crosshair hot-reload no longer wipes the mask. */
                 device_data->vtable.ResetDescriptorPool(device_data->device,
                                                         device_data->descriptor_pool,
                                                         0);
                 data->descriptor_set = VK_NULL_HANDLE;
-
-                /* also reset shader desc pool (shader mask desc set is invalid) */
-                if (device_data->shader_desc_pool) {
-                        device_data->vtable.ResetDescriptorPool(
-                            device_data->device, device_data->shader_desc_pool, 0);
-                        data->shader_mask_desc_set = VK_NULL_HANDLE;
-                }
         }
 
         /* clean up animation state */
