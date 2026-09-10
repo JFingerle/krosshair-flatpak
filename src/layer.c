@@ -1051,17 +1051,19 @@ static void shutdown_krosshair_image(swapchain_data_t* data)
                 data->crosshair_upload_buffer_mem = VK_NULL_HANDLE;
         }
 
-        if (data->descriptor_set) {
-                /* the main pool (device-scoped) holds the crosshair set; reset it to
-                 * free the slot — never destroy it. The dynamic mask is NOT touched
-                 * here: it is torn down only on mask-reload
-                 * (ensure_swapchain_dynamic_mask) or full swapchain teardown, so a
-                 * crosshair hot-reload no longer wipes the mask. */
+        /* reset the main pool (device-scoped) to free the crosshair set slot —
+         * gated on the pool handle, NOT on descriptor_set, so the reset can't be
+         * skipped by a stale/absent set (the original RC1 gate). A no-op when the
+         * pool is already empty (first upload uploads fresh; swapchain teardown
+         * resets pools). The dynamic mask is NOT touched here: it is torn down only
+         * on mask-reload (ensure_swapchain_dynamic_mask) or full swapchain teardown,
+         * so a crosshair hot-reload no longer wipes the mask. */
+        if (device_data->descriptor_pool) {
                 device_data->vtable.ResetDescriptorPool(device_data->device,
                                                         device_data->descriptor_pool,
                                                         0);
-                data->descriptor_set = VK_NULL_HANDLE;
         }
+        data->descriptor_set = VK_NULL_HANDLE;
 
         /* clean up animation state */
         if (data->anim_delays) {
@@ -1199,7 +1201,7 @@ static void update_image_descriptor(swapchain_data_t* data,
         device_data_t* device_data       = data->device_data;
 
         VkDescriptorImageInfo desc_image = {};
-        desc_image.sampler               = data->device_data->crosshair_sampler;
+        desc_image.sampler               = device_data->crosshair_sampler;
         desc_image.imageView             = image_view;
         desc_image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -2244,7 +2246,10 @@ static void ensure_swapchain_dynamic_mask(swapchain_data_t* data,
         char* mpath = get_dynamic_mask_path();
         int using_file = (mpath != NULL);
 
-        /* ── check for mask image reload ── */
+        /* ── check for mask image reload ──
+         * Only entered when a mask was actually uploaded (uploaded != 0); the
+         * shader-pool reset below is gated on the pool handle, not the set, so it
+         * can't be skipped by a stale set (same RC1 rule as the crosshair path). */
         if (data->dynamic_mask.uploaded) {
                 int needs_reload = 0;
 
@@ -3138,7 +3143,7 @@ static void create_device_stable_resources(device_data_t* device_data)
                 /* descriptor pool for shader dynamic desc set */
                 VkDescriptorPoolSize sp_size = {};
                 sp_size.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                sp_size.descriptorCount = 1 * 2; /* 2 bindings: mask + game_fb */
+                sp_size.descriptorCount = 2; /* 2 bindings: mask + game_fb */
 
                 VkDescriptorPoolCreateInfo sp_info = {};
                 sp_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -3872,6 +3877,12 @@ static VkResult overlay_QueuePresentKHR(VkQueue queue,
 
                 krosshair_draw_t* draw = NULL;
                 if (swapchain_data) {
+                        /* Known limitation: only i == 0 receives the app's wait
+                         * semaphores; subsequent swapchains draw with
+                         * n_wait_semaphores == 0. If two swapchains share a
+                         * graphics queue, the second overlay submit does not wait
+                         * on the app's semaphore and can race the game's writes to
+                         * its image. Pre-existing; not introduced by the leak fix. */
                         draw = before_present(
                             swapchain_data, queue_data,
                             pPresentInfo->pWaitSemaphores,
@@ -3967,6 +3978,11 @@ static void overlay_DestroyInstance(VkInstance instance,
 
         PFN_vkDestroyInstance chain_destroy =
             instance_data->vtable.DestroyInstance;
+
+        /* free the physical-device map entries + asprintf'd names (the (…,0)
+         * path is the only place they're freed); must run before freeing
+         * instance_data since it reads the vtable + instance handle. */
+        instance_data_map_physical_devices(instance_data, 0);
 
         unmap_object(HKEY(instance_data->instance));
         free(instance_data);
