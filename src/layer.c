@@ -624,13 +624,14 @@ typedef struct device_data {
         struct queue_data* graphic_queue;
         struct queue_data* queues[16];  // 16 should be enough?
         uint32_t queue_count;
+        uint32_t swapchain_count; /* live swapchains on this device */
 
         /* stable GPU resources: created once per device, shared by all
          * swapchains of that device, destroyed only in overlay_DestroyDevice.
-         * NOTE: the descriptor pools below are sized maxSets=1, so the layer
-         * assumes a SINGLE swapchain per device (multi-swapchain titles would
-         * exhaust the pools and the bulk reset would invalidate other swapchains'
-         * sets — not supported). */
+         * The descriptor pools are sized maxSets=4 — one crosshair set and one
+         * mask set per concurrent swapchain, up to 4. Reload paths use
+         * FreeDescriptorSets (targeted) so they never invalidate other
+         * swapchains' sets; only full swapchain teardown uses a bulk reset. */
         VkSampler crosshair_sampler;
         VkDescriptorSetLayout descriptor_layout;  /* 1 binding, immutable sampler */
         VkDescriptorPool descriptor_pool;         /* crosshair descriptor sets */
@@ -1065,24 +1066,18 @@ static void shutdown_krosshair_image(swapchain_data_t* data)
                 data->crosshair_upload_buffer_mem = VK_NULL_HANDLE;
         }
 
-        /* reset the main pool (device-scoped) to free the crosshair set slot —
-         * gated on the pool handle, NOT on descriptor_set, so the reset can't be
-         * skipped by a stale/absent set (the original RC1 gate). A no-op when the
-         * pool is already empty (first upload uploads fresh; swapchain teardown
-         * resets pools).
-         *
-         * KNOWN LIMITATION: the main/shader descriptor pools are device-scoped and
-         * sized maxSets=1, i.e. the layer assumes a SINGLE swapchain per device.
-         * The bulk reset below frees the whole pool; on a (hypothetical) second
-         * swapchain this would invalidate its set. Multi-swapchain titles are not
-         * supported — see device_data_t pools. The dynamic mask is NOT touched
-         * here: it is torn down only on mask-reload (ensure_swapchain_dynamic_mask)
-         * or full swapchain teardown, so a crosshair hot-reload no longer wipes
-         * the mask. */
-        if (device_data->descriptor_pool) {
-                device_data->vtable.ResetDescriptorPool(device_data->device,
-                                                        device_data->descriptor_pool,
-                                                        0);
+        /* free THIS swapchain's crosshair set (targeted, not a bulk pool reset) —
+         * gated on the set handle, so a fresh first upload (no set yet) is a
+         * no-op. FreeDescriptorSets frees only this swapchain's slot; other
+         * swapchains' sets (up to maxSets=4) are untouched. The mask is NOT
+         * touched here: it is freed only on mask-reload
+         * (ensure_swapchain_dynamic_mask) or full swapchain teardown, so a
+         * crosshair hot-reload no longer wipes the mask. */
+        if (data->descriptor_set != VK_NULL_HANDLE) {
+                VkDescriptorSet sets[] = {data->descriptor_set};
+                device_data->vtable.FreeDescriptorSets(
+                    device_data->device, device_data->descriptor_pool,
+                    1, sets);
         }
         data->descriptor_set = VK_NULL_HANDLE;
 
@@ -1306,6 +1301,9 @@ static VkDescriptorSet create_image_with_desc(swapchain_data_t* data,
 
         VkDescriptorSet descriptor_set         = {};
 
+        /* main pool is device-scoped, sized maxSets=4 — one set per concurrent
+         * swapchain. A 5th concurrent swapchain would exhaust the pool (the
+         * allocation below would fail with VK_ERROR_OUT_OF_POOL_MEMORY). */
         VkDescriptorSetAllocateInfo alloc_info = {};
         alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         alloc_info.descriptorPool     = data->device_data->descriptor_pool;
@@ -2309,10 +2307,13 @@ static void ensure_swapchain_dynamic_mask(swapchain_data_t* data,
                 data->dynamic_mask.uploaded = 0;
                 free(data->dynamic_mask.path);
                 data->dynamic_mask.path = NULL;
-                /* invalidate shader desc set so it gets re-created */
-                if (device_data->shader_desc_pool) {
-                        device_data->vtable.ResetDescriptorPool(
-                            device_data->device, device_data->shader_desc_pool, 0);
+                /* free THIS swapchain's mask set (targeted, not a bulk pool reset) —
+                 * other swapchains' sets (up to maxSets=4) are untouched */
+                if (data->shader_mask_desc_set != VK_NULL_HANDLE) {
+                        VkDescriptorSet sets[] = {data->shader_mask_desc_set};
+                        device_data->vtable.FreeDescriptorSets(
+                            device_data->device, device_data->shader_desc_pool,
+                            1, sets);
                         data->shader_mask_desc_set = VK_NULL_HANDLE;
                 }
         }
@@ -2358,10 +2359,14 @@ static void ensure_swapchain_dynamic_mask(swapchain_data_t* data,
         data->dynamic_mask.uploaded = 1;
         KROSSHAIR_LOG("[KROSSHAIR] loaded dynamic mask from: %s\n", mpath);
 
-        /* invalidate shader desc set so it gets re-created with new image view */
-        if (device_data->shader_desc_pool) {
-                device_data->vtable.ResetDescriptorPool(
-                    device_data->device, device_data->shader_desc_pool, 0);
+        /* free THIS swapchain's mask set (targeted, not a bulk pool reset) —
+         * the new image view will get a fresh allocation from the device-scoped
+         * pool; other swapchains' sets are untouched */
+        if (data->shader_mask_desc_set != VK_NULL_HANDLE) {
+                VkDescriptorSet sets[] = {data->shader_mask_desc_set};
+                device_data->vtable.FreeDescriptorSets(
+                    device_data->device, device_data->shader_desc_pool,
+                    1, sets);
                 data->shader_mask_desc_set = VK_NULL_HANDLE;
         }
 
@@ -3091,7 +3096,7 @@ static void create_device_stable_resources(device_data_t* device_data)
 
         VkDescriptorPoolCreateInfo desc_pool_info = {};
         desc_pool_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        desc_pool_info.maxSets = 1;
+        desc_pool_info.maxSets = 4; /* one set per concurrent swapchain */
         desc_pool_info.poolSizeCount = 1;
         desc_pool_info.pPoolSizes    = &sampler_pool_size;
         VK_CHECK(device_data->vtable.CreateDescriptorPool(
@@ -3172,7 +3177,7 @@ static void create_device_stable_resources(device_data_t* device_data)
 
                 VkDescriptorPoolCreateInfo sp_info = {};
                 sp_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-                sp_info.maxSets = 1;
+                sp_info.maxSets = 4; /* one set per concurrent swapchain */
                 sp_info.poolSizeCount = 1;
                 sp_info.pPoolSizes    = &sp_size;
                 VK_CHECK(device_data->vtable.CreateDescriptorPool(
@@ -3626,6 +3631,15 @@ static VkResult overlay_CreateSwapchainKHR(
         swapchain_data_t* swapchain_data =
             new_swapchain_data(*pSwapchain, device_data);
 
+        device_data->swapchain_count++;
+        if (device_data->swapchain_count > 1) {
+                KROSSHAIR_LOG(
+                    "[KROSSHAIR] WARNING: %u concurrent swapchains on this "
+                    "device — descriptor pools are sized for up to 4; "
+                    "exceeding that will fail allocation\n",
+                    device_data->swapchain_count);
+        }
+
         setup_swapchain_data(swapchain_data, pCreateInfo);
 
         KROSSHAIR_LOG("[KROSSHAIR] CreateSwapchainKHR: created %lu (%ux%u, n_images=%u, old=%lu)\n",
@@ -3647,6 +3661,7 @@ static void overlay_DestroySwapchainKHR(VkDevice device,
                 destroy_swapchain_data(data);
                 unmap_object(HKEY(data->swapchain));
                 free(data);
+                if (device_data->swapchain_count > 0) device_data->swapchain_count--;
         }
 
         device_data->vtable.DestroySwapchainKHR(device_data->device,
@@ -3985,6 +4000,25 @@ static void overlay_DestroyDevice(VkDevice device,
          * layouts, render pass, pipelines) are reclaimed by the driver when
          * the underlying device is destroyed, so we do not destroy them
          * explicitly here. Only the host bookkeeping must be freed. */
+
+        /* walk the map and tear down any swapchains that survived for this
+         * device (the app can destroy the device while swapchains are still
+         * alive during shutdown). destroy_swapchain_data does the GPU teardown
+         * + host-string frees; unmap + free release the map entries. */
+        for (size_t i = 0; i < MAX_VK_OBJECTS; i++) {
+                if (vk_obj_map.data[i].obj == 0) continue;
+                void* entry_data = vk_obj_map.data[i].data;
+                if (!entry_data) continue;
+                swapchain_data_t* sc =
+                    (swapchain_data_t*)entry_data;
+                if (sc->device_data != device_data) continue;
+                KROSSHAIR_LOG(
+                    "[KROSSHAIR] DestroyDevice: tearing down surviving "
+                    "swapchain %lu\n", (unsigned long)sc->swapchain);
+                destroy_swapchain_data(sc);
+                vk_map_delete(&vk_obj_map, HKEY(sc->swapchain));
+                free(sc);
+        }
 
         /* free queue data, iterating queues[] once; graphic_queue aliases
          * one entry so null it (never freed separately). */
