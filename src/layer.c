@@ -2290,8 +2290,9 @@ static void ensure_swapchain_dynamic_mask(swapchain_data_t* data,
 
         /* ── check for mask image reload ──
          * Only entered when a mask was actually uploaded (uploaded != 0); the
-         * shader-pool reset below is gated on the pool handle, not the set, so it
-         * can't be skipped by a stale set (same RC1 rule as the crosshair path). */
+         * set release below is a targeted FreeDescriptorSets gated on the set
+         * handle itself (pool untouched), so other swapchains' sets are not
+         * invalidated (same rule as the crosshair path). */
         if (data->dynamic_mask.uploaded) {
                 int needs_reload = 0;
 
