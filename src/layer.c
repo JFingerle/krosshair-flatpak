@@ -3676,7 +3676,12 @@ static VkResult overlay_CreateSwapchainKHR(
         /* the registry is capped at the descriptor-pool maxSets: only the
          * first KROSSHAIR_MAX_SWAPCHAINS swapchains are tracked (a 5th
          * can't allocate a descriptor set anyway), but swapchain_count
-         * stays accurate for the warning above */
+         * stays accurate for the warning above, which fires on every
+         * creation beyond the first — tracked or not.
+         * Known limitation (count > cap only): while the count exceeds the
+         * cap, unregister_swapchain's shift-down can duplicate or leave
+         * stale entries in the capped array, so the DestroyDevice sweep can
+         * double-free. Confined to the already-unsupported >4 case. */
         if (device_data->swapchain_count <= KROSSHAIR_MAX_SWAPCHAINS)
                 device_data->swapchains[device_data->swapchain_count - 1] =
                     swapchain_data;
@@ -4045,7 +4050,10 @@ static void overlay_DestroyDevice(VkDevice device,
         /* tear down any swapchains that survived for this device (the app can
          * destroy the device while swapchains are still alive during shutdown).
          * destroy_swapchain_data does the GPU teardown + host-string frees;
-         * unmap + free release the map entries. */
+         * unmap + free release the map entries.
+         * Assumes the registry is consistent, which only holds while the live
+         * count stays <= KROSSHAIR_MAX_SWAPCHAINS (see the registration site
+         * in overlay_CreateSwapchainKHR for the >cap desync limitation). */
         uint32_t n = device_data->swapchain_count;
         if (n > KROSSHAIR_MAX_SWAPCHAINS)
                 n = KROSSHAIR_MAX_SWAPCHAINS; /* registry cap */
