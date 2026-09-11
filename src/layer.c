@@ -1044,6 +1044,13 @@ static void shutdown_krosshair_image(swapchain_data_t* data)
 {
         device_data_t* device_data = data->device_data;
 
+        /* drain all ring slots' in-flight submits before freeing the
+         * crosshair set and images: every slot's command buffer may still
+         * be executing and referencing them (a per-frame slot-fence wait
+         * only covers the current image_index slot). No-op when called
+         * from destroy_swapchain_data, which already waited above. */
+        VK_CHECK(device_data->vtable.DeviceWaitIdle(device_data->device));
+
         if (data->crosshair_image_view) {
                 device_data->vtable.DestroyImageView(device_data->device,
                                                      data->crosshair_image_view, NULL);
@@ -1100,6 +1107,12 @@ static void shutdown_krosshair_image(swapchain_data_t* data)
 static void shutdown_dynamic_mask(swapchain_data_t* data)
 {
         device_data_t* device_data = data->device_data;
+
+        /* same in-flight drain as shutdown_krosshair_image: ring slot
+         * submits may still be sampling the mask image, and the mask set
+         * (which binds it) is freed by the reload caller right after we
+         * return */
+        VK_CHECK(device_data->vtable.DeviceWaitIdle(device_data->device));
 
         if (data->dynamic_mask.image_view) {
                 device_data->vtable.DestroyImageView(device_data->device,
