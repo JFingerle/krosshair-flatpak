@@ -632,10 +632,11 @@ typedef struct device_data {
 
         /* stable GPU resources: created once per device, shared by all
          * swapchains of that device, destroyed only in overlay_DestroyDevice.
-         * The descriptor pools are sized maxSets=4 — one crosshair set and one
-         * mask set per concurrent swapchain, up to 4. Reload paths use
-         * FreeDescriptorSets (targeted) so they never invalidate other
-         * swapchains' sets; only full swapchain teardown uses a bulk reset. */
+         * The descriptor pools are sized maxSets=KROSSHAIR_MAX_SWAPCHAINS with
+         * descriptorCount scaled to match (pool total = maxSets × per-set
+         * bindings). All set releases — reload and teardown — use targeted
+         * FreeDescriptorSets, so they never invalidate other swapchains'
+         * sets. */
         VkSampler crosshair_sampler;
         VkDescriptorSetLayout descriptor_layout;  /* 1 binding, immutable sampler */
         VkDescriptorPool descriptor_pool;         /* crosshair descriptor sets */
@@ -3097,11 +3098,13 @@ static void create_device_stable_resources(device_data_t* device_data)
 
         VkDescriptorPoolSize sampler_pool_size = {};
         sampler_pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sampler_pool_size.descriptorCount = 1; /* crosshair only */
+        /* one crosshair sampler descriptor per concurrent swapchain set */
+        sampler_pool_size.descriptorCount = KROSSHAIR_MAX_SWAPCHAINS;
 
         VkDescriptorPoolCreateInfo desc_pool_info = {};
         desc_pool_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        desc_pool_info.maxSets = 4; /* one set per concurrent swapchain */
+        desc_pool_info.maxSets = KROSSHAIR_MAX_SWAPCHAINS; /* one set per
+                                                            concurrent swapchain */
         desc_pool_info.poolSizeCount = 1;
         desc_pool_info.pPoolSizes    = &sampler_pool_size;
         VK_CHECK(device_data->vtable.CreateDescriptorPool(
@@ -3178,11 +3181,13 @@ static void create_device_stable_resources(device_data_t* device_data)
                 /* descriptor pool for shader dynamic desc set */
                 VkDescriptorPoolSize sp_size = {};
                 sp_size.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                sp_size.descriptorCount = 2; /* 2 bindings: mask + game_fb */
+                sp_size.descriptorCount =
+                    2 * KROSSHAIR_MAX_SWAPCHAINS; /* 2 bindings: mask + game_fb */
 
                 VkDescriptorPoolCreateInfo sp_info = {};
                 sp_info.sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-                sp_info.maxSets = 4; /* one set per concurrent swapchain */
+                 sp_info.maxSets = KROSSHAIR_MAX_SWAPCHAINS; /* one set per
+                                                              concurrent swapchain */
                 sp_info.poolSizeCount = 1;
                 sp_info.pPoolSizes    = &sp_size;
                 VK_CHECK(device_data->vtable.CreateDescriptorPool(
