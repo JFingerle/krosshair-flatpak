@@ -2379,17 +2379,6 @@ static void ensure_swapchain_dynamic_mask(swapchain_data_t* data,
         data->dynamic_mask.uploaded = 1;
         KROSSHAIR_LOG("[KROSSHAIR] loaded dynamic mask from: %s\n", mpath);
 
-        /* free THIS swapchain's mask set (targeted, not a bulk pool reset) —
-         * the new image view will get a fresh allocation from the device-scoped
-         * pool; other swapchains' sets are untouched */
-        if (data->shader_mask_desc_set != VK_NULL_HANDLE) {
-                VkDescriptorSet sets[] = {data->shader_mask_desc_set};
-                device_data->vtable.FreeDescriptorSets(
-                    device_data->device, device_data->shader_desc_pool,
-                    1, sets);
-                data->shader_mask_desc_set = VK_NULL_HANDLE;
-        }
-
 check_cfg:
         /* ── check for config file reload ── */
         {
